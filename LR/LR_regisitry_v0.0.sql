@@ -439,7 +439,7 @@ SELECT
 	lnf.missed_medication_doses_in_last_7_days,
 	lnf.seizures_since_last_visit,
 	--mhd.visit_location AS discharge_visit_location,
-	--mhd.location AS discharge_visit_location,
+	mhd.location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
 	mhd.type_of_activity AS discharge_type_of_activity,
 	mhd.mhos_at_discharge,
