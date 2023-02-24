@@ -28,6 +28,76 @@ entry_exit_cte AS (
 		AND mhd.discharge_date > e1.entry_date 
 		AND (mhd.discharge_date < e2.entry_date OR e2.entry_date IS NULL)
 	ORDER BY e1.patient_id, e2.entry_date),
+syndrome_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		CASE 
+			WHEN pcia.main_syndrome = 'Depression' OR
+			pcia.additional_syndrome = 'Depression' THEN 1 
+			ELSE NULL 
+		END AS depression,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Anxiety disorder' OR
+			pcia.additional_syndrome = 'Anxiety disorder' THEN 1 
+			ELSE NULL 
+		END AS anxiety_disorder,
+		CASE 
+			WHEN pcia.main_syndrome = 'Trauma related symptoms' OR
+			pcia.additional_syndrome = 'Trauma related symptoms' THEN 1 
+			ELSE NULL 
+		END AS trauma_related_symptoms,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Adult behavioral / substance problem' OR
+			pcia.additional_syndrome = 'Adult behavioral / substance problem' THEN 1 
+			ELSE NULL 
+		END AS adult_behavioral_substance_problem,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Child behavioral problem' OR
+			pcia.additional_syndrome = 'Child behavioral problem' THEN 1 
+			ELSE NULL 
+		END AS child_behavioral_problem,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Psychosis' OR
+			pcia.additional_syndrome = 'Psychosis' THEN 1 
+			ELSE NULL 
+		END AS psychosis,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Psychosomatic problems' OR
+			pcia.additional_syndrome = 'Psychosomatic problems' THEN 1 
+			ELSE NULL 
+		END AS psychosomatic_problems,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Neurocognitive problem' OR
+			pcia.additional_syndrome = 'Neurocognitive problem' THEN 1 
+			ELSE NULL 
+		END AS neurocognitive_problem,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Epilepsy' OR
+			pcia.additional_syndrome = 'Epilepsy' THEN 1 
+			ELSE NULL 
+		END AS epilepsy,	
+		CASE 
+			WHEN pcia.main_syndrome = 'Other' OR
+			pcia.additional_syndrome = 'Other' THEN 1 
+			ELSE NULL 
+		END AS other_syndrome
+	FROM entry_exit_cte eec 
+	LEFT OUTER JOIN (SELECT pcia2.* FROM psy_counselors_initial_assessment pcia2 JOIN entry_exit_cte eec ON eec.patient_id = pcia2.patient_id WHERE pcia2.date >= eec.entry_date AND (pcia2.date <= eec.discharge_date OR eec.discharge_date IS NULL)) pcia
+		ON eec.patient_id = pcia.patient_id),
+initial_cgi_cte AS (
+	SELECT
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		CASE 
+			WHEN pmia.cgi_s_score IS NOT NULL THEN pmia.cgi_s_score
+			WHEN pmia.cgi_s_score IS NULL AND pcia.cgi_s_score IS NOT NULL THEN pcia.cgi_s_score
+			ELSE NULL 
+		END AS cgi_s_score_at_initial_assessment	
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
+		ON eec.patient_id = pmia.patient_id
+	LEFT OUTER JOIN psy_counselors_initial_assessment pcia
+		ON eec.patient_id = pcia.patient_id
+	WHERE pmia.date >= eec.entry_date AND (pmia.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND pcia.date >= eec.entry_date AND (pcia.date <= eec.discharge_date OR eec.discharge_date IS NULL)),
 ncd_diagnosis_cte AS (
 		SELECT 
 		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
@@ -242,7 +312,70 @@ last_ncd_form AS (
 	LEFT OUTER JOIN ncd n 
 		ON eec.patient_id = n.patient_id
 	WHERE n.date >= eec.entry_date AND (n.date <= eec.discharge_date OR eec.discharge_date IS NULL)
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, n.date DESC)
+	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, n.date DESC),
+counselor_ia_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS counselor_initial_consultations
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psy_counselors_initial_assessment pcia 
+		ON eec.patient_id = pcia.patient_id
+	WHERE pcia.date >= eec.entry_date AND (pcia.date <= eec.discharge_date OR eec.discharge_date IS NULL)
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+counselor_fu_individual_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS counselor_fu_individual_sessions
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psy_counselors_follow_up pcfu 
+		ON eec.patient_id = pcfu.patient_id
+	WHERE pcfu.date >= eec.entry_date AND (pcfu.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (pcfu.type_of_activity IS NULL OR pcfu.type_of_activity = 'Individual session')
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+counselor_fu_other_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS counselor_fu_other_sessions
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psy_counselors_follow_up pcfu 
+		ON eec.patient_id = pcfu.patient_id
+	WHERE pcfu.date >= eec.entry_date AND (pcfu.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (pcfu.type_of_activity != 'Individual session' OR pcfu.type_of_activity != 'Missed appointment') AND pcfu.type_of_activity IS NOT NULL
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+psychiatrist_ia_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS psychiatrist_initial_consultations
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
+		ON eec.patient_id = pmia.patient_id
+	WHERE pmia.date >= eec.entry_date AND (pmia.date <= eec.discharge_date OR eec.discharge_date IS NULL)
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+psychiatrist_fu_individual_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS psychiatrist_fu_individual_sessions
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psychiatrist_mhgap_follow_up pmfu 
+		ON eec.patient_id = pmfu.patient_id
+	WHERE pmfu.date >= eec.entry_date AND (pmfu.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (pmfu.type_of_activity IS NULL OR pmfu.type_of_activity = 'Individual session')
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+psychiatrist_fu_other_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS psychiatrist_fu_other_sessions
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psychiatrist_mhgap_follow_up pmfu 
+		ON eec.patient_id = pmfu.patient_id
+	WHERE pmfu.date >= eec.entry_date AND (pmfu.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (pmfu.type_of_activity != 'Individual session' OR pmfu.type_of_activity != 'Missed appointment') AND pmfu.type_of_activity IS NOT NULL
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+ncd_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		count(*) AS ncd_consultations
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN ncd n  
+		ON eec.patient_id = n.patient_id
+	WHERE n.date >= eec.entry_date AND (n.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (n.patient_outcome IS NULL OR n.patient_outcome != 'Lost to follow up' OR n.patient_outcome != 'Deceased')
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date)
 SELECT
 	pi."Patient_Identifier",
 	eec.patient_id,
@@ -251,6 +384,7 @@ SELECT
 	pdd.age AS age_current,
 	pdd.age_group AS age_group_current,
 --need to see if we add age/age group at visit 
+	pdd.gender,
 	pa."patientState", 
 	pa."Education_level",
 	pa."Personal_Situation",
@@ -266,6 +400,10 @@ SELECT
 	END AS cohort,
 	eec.entry_date, 
 	eec.discharge_date,
+	CASE 
+		WHEN eec.discharge_date IS NULL THEN 1
+		ELSE null
+	END AS active,	
 	mhi.visit_location AS entry_visit_location,
 	mhi.source_of_initial_patient_referral,
 	CASE 
@@ -400,6 +538,17 @@ SELECT
 		CASE WHEN mhi.stressor_3 IS NOT NULL AND mhi.stressor_3 != 'None' THEN 1 ELSE 0 END AS stressor_count,
 	mhi.risk_factor_present,
 	mhi.urgent_status,
+	sc.depression AS "synrome: depression",	
+	sc.anxiety_disorder AS "synrome: anxiety disorder",
+	sc.trauma_related_symptoms AS "synrome: trauma related symptoms",	
+	sc.adult_behavioral_substance_problem AS "synrome: adult behavioral substance problem",	
+	sc.child_behavioral_problem AS "synrome: child behavioral problem",	
+	sc.psychosis AS "synrome: psychosis",	
+	sc.psychosomatic_problems AS "synrome: psychosomatic problems",	
+	sc.neurocognitive_problem AS "synrome: neurocognitive problem",	
+	sc.epilepsy AS "synrome: epilepsy",	
+	sc.other_syndrome AS "synrome: other",
+	icc.cgi_s_score_at_initial_assessment,
 	mhdc.acute_transient_psychotic_disorder AS "diagnosis: acute and transient psychotic disorder",	
 	mhdc.acute_stress_reaction AS "diagnosis: acute stress reaction",	
 	mhdc.adjustment_disorders AS "diagnosis: adjustment disorders",	
@@ -445,7 +594,18 @@ SELECT
 	mhd.mhos_at_discharge,
 	mhd.cgi_s_score_at_discharge,
 	mhd.cgi_i_score_at_discharge,
-	mhd.patient_outcome  
+	mhd.patient_outcome,
+	cic.counselor_initial_consultations,
+	cfic.counselor_fu_individual_sessions,
+	COALESCE(cic.counselor_initial_consultations,0) + COALESCE(cfic.counselor_fu_individual_sessions,0) AS counselor_individual_sessions,
+	cfoc.counselor_fu_other_sessions,
+	COALESCE(cic.counselor_initial_consultations,0) + COALESCE(cfic.counselor_fu_individual_sessions,0) + COALESCE(cfoc.counselor_fu_other_sessions,0) AS counselor_sessions,
+	pic.psychiatrist_initial_consultations,
+	pfic.psychiatrist_fu_individual_sessions,
+	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) AS psychiatrist_individual_sessions,
+	pfoc.psychiatrist_fu_other_sessions,
+	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) + COALESCE(pfoc.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
+	nc.ncd_consultations
 FROM entry_exit_cte eec
 LEFT OUTER JOIN patient_identifier pi
 	ON eec.patient_id = pi.patient_id
@@ -455,6 +615,10 @@ LEFT OUTER JOIN person_details_default pdd
 	ON eec.patient_id = pdd.person_id
 LEFT OUTER JOIN mental_health_intake mhi
 	ON eec.entry_encounter_id = mhi.encounter_id
+LEFT OUTER JOIN syndrome_cte sc 
+	ON eec.entry_encounter_id = sc.entry_encounter_id
+LEFT OUTER JOIN initial_cgi_cte icc
+	ON eec.entry_encounter_id = icc.entry_encounter_id
 LEFT OUTER JOIN mental_health_discharge mhd 
 	ON eec.discharge_encounter_id = mhd.encounter_id
 LEFT OUTER JOIN ncd_diagnosis_cte ncddc
@@ -463,3 +627,17 @@ LEFT OUTER JOIN mh_diagnosis_cte mhdc
 	ON eec.entry_encounter_id = mhdc.entry_encounter_id 
 LEFT OUTER JOIN last_ncd_form lnf 
 	ON eec.entry_encounter_id = lnf.entry_encounter_id 
+LEFT OUTER JOIN counselor_ia_cte cic 
+	ON eec.entry_encounter_id = cic.entry_encounter_id
+LEFT OUTER JOIN counselor_fu_individual_cte cfic 
+	ON eec.entry_encounter_id = cfic.entry_encounter_id
+LEFT OUTER JOIN counselor_fu_other_cte cfoc 
+	ON eec.entry_encounter_id = cfoc.entry_encounter_id
+LEFT OUTER JOIN psychiatrist_ia_cte pic 
+	ON eec.entry_encounter_id = pic.entry_encounter_id
+LEFT OUTER JOIN psychiatrist_fu_individual_cte pfic 
+	ON eec.entry_encounter_id = pfic.entry_encounter_id
+LEFT OUTER JOIN psychiatrist_fu_other_cte pfoc 
+	ON eec.entry_encounter_id = pfoc.entry_encounter_id
+LEFT OUTER JOIN ncd_cte nc
+	ON eec.entry_encounter_id = nc.entry_encounter_id
