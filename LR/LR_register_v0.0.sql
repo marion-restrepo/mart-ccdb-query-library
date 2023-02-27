@@ -375,14 +375,32 @@ ncd_cte AS (
 	LEFT OUTER JOIN ncd n  
 		ON eec.patient_id = n.patient_id
 	WHERE n.date >= eec.entry_date AND (n.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (n.patient_outcome IS NULL OR n.patient_outcome != 'Lost to follow up' OR n.patient_outcome != 'Deceased')
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date)
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
+psychotropic_prescription AS (
+SELECT
+	DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+	CASE 
+		WHEN mdd.patient_id IS NOT NULL THEN 1 
+		ELSE NULL
+	END AS psychotropic_prescription
+FROM entry_exit_cte eec
+LEFT OUTER JOIN medication_data_default mdd
+	ON eec.patient_id = mdd.patient_id
+WHERE mdd.start_date >= eec.entry_date AND (mdd.start_date <= eec.discharge_date OR eec.discharge_date IS NULL) AND mdd.coded_drug_name IS NOT NULL AND mdd.coded_drug_name != 'FOLIC acid, 5 mg, tab.')
 SELECT
 	pi."Patient_Identifier",
 	eec.patient_id,
 	pa."Patient_code",
 	--pa."Other_patient_identifier",
 	pdd.age AS age_current,
-	pdd.age_group AS age_group_current,
+	CASE 
+		WHEN pdd.age::int < 4 THEN '0-3'
+		WHEN pdd.age::int > 3 AND pdd.age::int < 8 THEN '04-07'
+		WHEN pdd.age::int > 9 AND pdd.age::int < 15 THEN '08-14'
+		WHEN pdd.age::int > 14 AND pdd.age::int < 18 THEN '15-17'
+		WHEN pdd.age::int > 17 THEN '18+'
+		ELSE NULL
+	END AS age_group_current,
 --need to see if we add age/age group at visit 
 	pdd.gender,
 	pa."patientState", 
@@ -605,7 +623,8 @@ SELECT
 	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) AS psychiatrist_individual_sessions,
 	pfoc.psychiatrist_fu_other_sessions,
 	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) + COALESCE(pfoc.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
-	nc.ncd_consultations
+	nc.ncd_consultations,
+	pp.psychotropic_prescription
 FROM entry_exit_cte eec
 LEFT OUTER JOIN patient_identifier pi
 	ON eec.patient_id = pi.patient_id
@@ -641,3 +660,5 @@ LEFT OUTER JOIN psychiatrist_fu_other_cte pfoc
 	ON eec.entry_encounter_id = pfoc.entry_encounter_id
 LEFT OUTER JOIN ncd_cte nc
 	ON eec.entry_encounter_id = nc.entry_encounter_id
+LEFT OUTER JOIN psychotropic_prescription pp
+	ON eec.entry_encounter_id = pp.entry_encounter_id
