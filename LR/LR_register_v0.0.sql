@@ -394,11 +394,11 @@ SELECT
 	--pa."Other_patient_identifier",
 	pdd.age AS age_current,
 	CASE 
-		WHEN pdd.age::int < 4 THEN '0-3'
-		WHEN pdd.age::int > 3 AND pdd.age::int < 8 THEN '04-07'
-		WHEN pdd.age::int > 9 AND pdd.age::int < 15 THEN '08-14'
-		WHEN pdd.age::int > 14 AND pdd.age::int < 18 THEN '15-17'
-		WHEN pdd.age::int > 17 THEN '18+'
+		WHEN pdd.age::int <= 3 THEN '0-3'
+		WHEN pdd.age::int >= 4 AND pdd.age::int <= 7 THEN '04-07'
+		WHEN pdd.age::int >= 8 AND pdd.age::int <= 14 THEN '08-14'
+		WHEN pdd.age::int >= 15 AND pdd.age::int <= 17 THEN '15-17'
+		WHEN pdd.age::int >= 18 THEN '18+'
 		ELSE NULL
 	END AS age_group_current,
 --need to see if we add age/age group at visit 
