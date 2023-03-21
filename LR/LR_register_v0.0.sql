@@ -386,7 +386,29 @@ SELECT
 FROM entry_exit_cte eec
 LEFT OUTER JOIN medication_data_default mdd
 	ON eec.patient_id = mdd.patient_id
-WHERE mdd.start_date >= eec.entry_date AND (mdd.start_date <= eec.discharge_date OR eec.discharge_date IS NULL) AND mdd.coded_drug_name IS NOT NULL AND mdd.coded_drug_name != 'FOLIC acid, 5 mg, tab.')
+WHERE mdd.start_date >= eec.entry_date AND (mdd.start_date <= eec.discharge_date OR eec.discharge_date IS NULL) AND mdd.coded_drug_name IS NOT NULL AND mdd.coded_drug_name != 'FOLIC acid, 5 mg, tab.'),
+visit_locations_cte AS (
+	SELECT n.date, n.patient_id, n.visit_location FROM ncd n WHERE n.visit_location IS NOT NULL 
+	UNION
+	SELECT pcia.date, pcia.patient_id, pcia.visit_location FROM psy_counselors_initial_assessment pcia WHERE pcia.visit_location IS NOT NULL 
+	UNION 
+	SELECT pmia.date, pmia.patient_id, pmia.visit_location FROM psychiatrist_mhgap_initial_assessment pmia WHERE pmia.visit_location IS NOT NULL 
+	UNION
+	SELECT pcfu.date, pcfu.patient_id, pcfu.visit_location FROM psy_counselors_follow_up pcfu WHERE pcfu.visit_location IS NOT NULL 
+	UNION
+	SELECT pmfu.date, pmfu.patient_id, pmfu.visit_location FROM psychiatrist_mhgap_follow_up pmfu WHERE pmfu.visit_location IS NOT NULL
+	UNION
+	SELECT mhd.discharge_date AS date, mhd.patient_id, mhd.location FROM mental_health_discharge mhd WHERE mhd.location IS NOT NULL),
+last_visit_location_cte AS (	
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		vlc.visit_location AS visit_location
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN visit_locations_cte vlc
+		ON eec.patient_id = vlc.patient_id
+	WHERE vlc.date >= eec.entry_date AND (vlc.date <= eec.discharge_date OR eec.discharge_date IS NULL)
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, vlc.date, vlc.visit_location
+	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, vlc.date DESC)
 SELECT
 	pi."Patient_Identifier",
 	eec.patient_id,
@@ -421,6 +443,11 @@ SELECT
 		ELSE null
 	END AS active,
 	mhi.visit_location AS entry_visit_location,
+	CASE 
+		WHEN lvlc.visit_location IS NOT NULL THEN lvlc.visit_location
+		WHEN lvlc.visit_location IS NULL THEN mhi.visit_location 
+		ELSE NULL 
+	END AS last_visit_location,
 	mhi.source_of_initial_patient_referral,
 	CASE 
 		WHEN mhi.stressor_1 = 'Non-conflict-related medical condition' THEN 1
@@ -603,7 +630,6 @@ SELECT
 	lnf.hospitalised_since_last_visit,
 	lnf.missed_medication_doses_in_last_7_days,
 	lnf.seizures_since_last_visit,
-	--mhd.visit_location AS discharge_visit_location,
 	mhd.location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
 	mhd.type_of_activity AS discharge_type_of_activity,
@@ -660,3 +686,5 @@ LEFT OUTER JOIN ncd_cte nc
 	ON eec.entry_encounter_id = nc.entry_encounter_id
 LEFT OUTER JOIN psychotropic_prescription pp
 	ON eec.entry_encounter_id = pp.entry_encounter_id
+LEFT OUTER JOIN last_visit_location_cte lvlc
+	ON eec.entry_encounter_id = lvlc.entry_encounter_id
