@@ -237,7 +237,7 @@ consultations_cte AS (
 		pcia.intervention_setting,
 		'Individual session' AS type_of_activity,
 		'Initial' AS visit_type,
-		'Counselors' AS provider_type
+		'Counselor' AS provider_type
 	FROM psy_counselors_initial_assessment pcia 
 	UNION
 	SELECT
