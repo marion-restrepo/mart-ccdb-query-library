@@ -292,7 +292,6 @@ SELECT
 		ELSE NULL 
 	END AS cohort,
 	cc.date AS visit_date,
-	cc.patient_id,
 	cc.visit_location,
 	cc.intervention_setting,
 	cc.type_of_activity,
