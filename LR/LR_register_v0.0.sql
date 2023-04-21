@@ -1,18 +1,18 @@
 WITH entry2_cte AS (
 	SELECT
-		patient_id,
-		encounter_id AS entry_encounter_id,
-		date AS entry_date, 
-		CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry2_id,
+		mhi.patient_id,
+		mhi.encounter_id AS entry_encounter_id,
+		mhi.date AS entry_date, 
+		CONCAT(mhi.patient_id, ROW_NUMBER () OVER (PARTITION BY mhi.patient_id ORDER BY mhi.date)) AS entry2_id,
 		1 AS one
-	FROM mental_health_intake),
+	FROM mental_health_intake mhi),
 entry1_cte AS (
 	SELECT
-		patient_id, 
-		entry_encounter_id,
-		entry_date,
-		entry2_id::int+one AS entry1_id
-	FROM entry2_cte),
+		e2c.patient_id, 
+		e2c.entry_encounter_id,
+		e2c.entry_date,
+		e2c.entry2_id::int+one AS entry1_id
+	FROM entry2_cte e2c),
 entry_exit_cte AS (
 	SELECT
 		e1.patient_id, 
