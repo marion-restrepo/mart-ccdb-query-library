@@ -1,17 +1,17 @@
 WITH entry2_cte AS (
 	SELECT
-	    patient_id,
-	    encounter_id AS entry_encounter_id,
+		patient_id,
+		encounter_id AS entry_encounter_id,
 		date AS entry_date, 
-	    CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry2_id,
-	    1 AS one
+		CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry2_id,
+		1 AS one
 	FROM mental_health_intake),
 entry1_cte AS (
 	SELECT
-	    patient_id, 
-	    entry_encounter_id,
+		patient_id, 
+		entry_encounter_id,
 		entry_date,
-	    entry2_id::int+one AS entry1_id
+		entry2_id::int+one AS entry1_id
 	FROM entry2_cte),
 entry_exit_cte AS (
 	SELECT
@@ -299,20 +299,30 @@ mh_diagnosis_cte AS (
 		ON eec.patient_id = pmia.patient_id
 	LEFT OUTER JOIN (SELECT pmfu2.* FROM psychiatrist_mhgap_follow_up pmfu2 JOIN entry_exit_cte eec ON eec.patient_id = pmfu2.patient_id WHERE pmfu2.date >= eec.entry_date AND (pmfu2.date <= eec.discharge_date OR eec.discharge_date IS NULL)) pmfu
 		ON eec.patient_id = pmfu.patient_id),
-last_ncd_form AS (
+recent_ncd_cte AS (
 	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		DISTINCT ON (n.patient_id) n.patient_id,
 		n.date AS last_ncd_date,
 		n.visit_type,
 		n.currently_pregnant,
 		n.hospitalised_since_last_visit,
 		n.missed_medication_doses_in_last_7_days,
-		n.seizures_since_last_visit 
+		n.seizures_since_last_visit AS seizures_last_visit
+	FROM ncd n
+	ORDER BY n.patient_id, n.date),
+last_ncd_form_cte AS (
+	SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
+		rnc.last_ncd_date,
+		rnc.visit_type,
+		rnc.currently_pregnant,
+		rnc.hospitalised_since_last_visit,
+		rnc.missed_medication_doses_in_last_7_days,
+		rnc.seizures_last_visit 
 	FROM entry_exit_cte eec 
-	LEFT OUTER JOIN ncd n 
-		ON eec.patient_id = n.patient_id
-	WHERE n.date >= eec.entry_date AND (n.date <= eec.discharge_date OR eec.discharge_date IS NULL)
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, n.date DESC),
+	LEFT OUTER JOIN recent_ncd_cte rnc 
+	ON eec.patient_id = rnc.patient_id
+	WHERE rnc.last_ncd_date >= eec.entry_date AND (rnc.last_ncd_date <= eec.discharge_date OR eec.discharge_date IS NULL)),		
 counselor_ia_cte AS (
 	SELECT 
 		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
@@ -376,7 +386,7 @@ ncd_cte AS (
 		ON eec.patient_id = n.patient_id
 	WHERE n.date >= eec.entry_date AND (n.date <= eec.discharge_date OR eec.discharge_date IS NULL) AND (n.patient_outcome IS NULL OR n.patient_outcome != 'Lost to follow up' OR n.patient_outcome != 'Deceased')
 	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date),
-psychotropic_prescription AS (
+psychotropic_prescription_cte AS (
 SELECT
 	DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
 	CASE 
@@ -551,7 +561,6 @@ SELECT
 		WHEN mhi.stressor_3 = 'Displaced due to conflict' THEN 1
 		ELSE null
 	END AS "stressor: displaced due to conflict",
---The following 3 stressors are project sepecific
 	CASE 
 		WHEN mhi.stressor_1 = 'Distress as a result of Ebola outbreak' THEN 1
 		WHEN mhi.stressor_2 = 'Distress as a result of Ebola outbreak' THEN 1
@@ -624,11 +633,11 @@ SELECT
 	ncddc.generalised_epilepsy AS "diagnosis: generalised epilepsy",
 	ncddc.unclassified_epilepsy AS "diagnosis: unclassified epilepsy",
 	ncddc.other AS "diagnosis: other epilepsy",
-	lnf.last_ncd_date,
-	lnf.currently_pregnant,
-	lnf.hospitalised_since_last_visit,
-	lnf.missed_medication_doses_in_last_7_days,
-	lnf.seizures_since_last_visit,
+	lnfc.last_ncd_date,
+	lnfc.currently_pregnant,
+	lnfc.hospitalised_since_last_visit,
+	lnfc.missed_medication_doses_in_last_7_days,
+	lnfc.seizures_last_visit,
 	mhd.location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
 	mhd.type_of_activity AS discharge_type_of_activity,
@@ -647,7 +656,7 @@ SELECT
 	pfoc.psychiatrist_fu_other_sessions,
 	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) + COALESCE(pfoc.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
 	nc.ncd_consultations,
-	pp.psychotropic_prescription
+	ppc.psychotropic_prescription
 FROM entry_exit_cte eec
 LEFT OUTER JOIN patient_identifier pi
 	ON eec.patient_id = pi.patient_id
@@ -667,8 +676,8 @@ LEFT OUTER JOIN ncd_diagnosis_cte ncddc
 	ON eec.entry_encounter_id = ncddc.entry_encounter_id 
 LEFT OUTER JOIN mh_diagnosis_cte mhdc
 	ON eec.entry_encounter_id = mhdc.entry_encounter_id 
-LEFT OUTER JOIN last_ncd_form lnf 
-	ON eec.entry_encounter_id = lnf.entry_encounter_id 
+LEFT OUTER JOIN last_ncd_form_cte lnfc 
+	ON eec.entry_encounter_id = lnfc.entry_encounter_id 
 LEFT OUTER JOIN counselor_ia_cte cic 
 	ON eec.entry_encounter_id = cic.entry_encounter_id
 LEFT OUTER JOIN counselor_fu_individual_cte cfic 
@@ -683,7 +692,7 @@ LEFT OUTER JOIN psychiatrist_fu_other_cte pfoc
 	ON eec.entry_encounter_id = pfoc.entry_encounter_id
 LEFT OUTER JOIN ncd_cte nc
 	ON eec.entry_encounter_id = nc.entry_encounter_id
-LEFT OUTER JOIN psychotropic_prescription pp
-	ON eec.entry_encounter_id = pp.entry_encounter_id
+LEFT OUTER JOIN psychotropic_prescription_cte ppc
+	ON eec.entry_encounter_id = ppc.entry_encounter_id
 LEFT OUTER JOIN last_visit_location_cte lvlc
 	ON eec.entry_encounter_id = lvlc.entry_encounter_id
