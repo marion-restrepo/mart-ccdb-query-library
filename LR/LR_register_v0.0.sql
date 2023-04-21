@@ -304,9 +304,9 @@ recent_ncd_cte AS (
 		DISTINCT ON (n.patient_id) n.patient_id,
 		n.date AS last_ncd_date,
 		n.visit_type,
-		n.currently_pregnant,
-		n.hospitalised_since_last_visit,
-		n.missed_medication_doses_in_last_7_days,
+		n.currently_pregnant AS pregnant_last_visit,
+		n.hospitalised_since_last_visit AS hospitalised_last_visit,
+		n.missed_medication_doses_in_last_7_days AS missed_medication_last_visit,
 		n.seizures_since_last_visit AS seizures_last_visit
 	FROM ncd n
 	ORDER BY n.patient_id, n.date),
@@ -315,9 +315,9 @@ last_ncd_form_cte AS (
 		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
 		rnc.last_ncd_date,
 		rnc.visit_type,
-		rnc.currently_pregnant,
-		rnc.hospitalised_since_last_visit,
-		rnc.missed_medication_doses_in_last_7_days,
+		rnc.pregnant_last_visit,
+		rnc.hospitalised_last_visit,
+		rnc.missed_medication_last_visit,
 		rnc.seizures_last_visit 
 	FROM entry_exit_cte eec 
 	LEFT OUTER JOIN recent_ncd_cte rnc 
@@ -634,9 +634,9 @@ SELECT
 	ncddc.unclassified_epilepsy AS "diagnosis: unclassified epilepsy",
 	ncddc.other AS "diagnosis: other epilepsy",
 	lnfc.last_ncd_date,
-	lnfc.currently_pregnant,
-	lnfc.hospitalised_since_last_visit,
-	lnfc.missed_medication_doses_in_last_7_days,
+	lnfc.pregnant_last_visit,
+	lnfc.hospitalised_last_visit,
+	lnfc.missed_medication_last_visit,
 	lnfc.seizures_last_visit,
 	mhd.location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
