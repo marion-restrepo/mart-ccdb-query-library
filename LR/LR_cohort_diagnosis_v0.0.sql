@@ -67,7 +67,7 @@ last_mh_main_dx_cte AS (
 		eec.discharge_encounter_id,
 		eec.discharge_date,
 		mmhd.date,
-		CASE WHEN mmhd.main_diagnosis = 'None' THEN NULL WHEN mmhd.main_diagnosis = 'Other' THEN 'Other mental health diagnosis'WHEN mmhd.main_diagnosis != 'Other' OR mmhd.main_diagnosis != 'None' THEN mmhd.main_diagnosis ELSE NULL END AS diagnosis
+		CASE WHEN mmhd.main_diagnosis = 'None' THEN NULL WHEN mmhd.main_diagnosis = 'Other' THEN 'Other mental health diagnosis' WHEN mmhd.main_diagnosis != 'Other' OR mmhd.main_diagnosis != 'None' THEN mmhd.main_diagnosis ELSE NULL END AS diagnosis
 	FROM entry_exit_cte eec
 	LEFT OUTER JOIN (
 		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
@@ -75,7 +75,7 @@ last_mh_main_dx_cte AS (
 		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
 		ON eec.patient_id = mmhd.patient_id AND eec.entry_date <= mmhd.date::date AND CASE WHEN eec.discharge_date IS NOT NULL THEN eec.discharge_date ELSE current_date END >= mmhd.date::date
 	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, mmhd.date::date,	mmhd.main_diagnosis 
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
 	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, mmhd.date::date DESC),
 last_mh_sec_dx_cte AS (
 	SELECT 
@@ -85,7 +85,7 @@ last_mh_sec_dx_cte AS (
 		eec.discharge_encounter_id,
 		eec.discharge_date,
 		mmhd.date,
-		CASE WHEN mmhd.secondary_diagnosis = 'None' THEN NULL WHEN mmhd.secondary_diagnosis = 'Other' THEN 'Other mental health diagnosis'WHEN mmhd.secondary_diagnosis != 'Other' OR mmhd.secondary_diagnosis != 'None' THEN mmhd.secondary_diagnosis ELSE NULL END AS diagnosis
+		CASE WHEN mmhd.secondary_diagnosis = 'None' THEN NULL WHEN mmhd.secondary_diagnosis = 'Other' THEN 'Other mental health diagnosis' WHEN mmhd.secondary_diagnosis != 'Other' OR mmhd.secondary_diagnosis != 'None' THEN mmhd.secondary_diagnosis ELSE NULL END AS diagnosis
 	FROM entry_exit_cte eec
 	LEFT OUTER JOIN (
 		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
