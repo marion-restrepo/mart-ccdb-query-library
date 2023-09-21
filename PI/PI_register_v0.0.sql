@@ -23,6 +23,17 @@ SELECT
 	WHERE pcia.date >= eec.intake_date AND (pcia.date <= eec.discharge_date OR eec.discharge_date IS NULL)
 	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date, pcia.date
 	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date, pcia.date ASC),
+-- The first clinician initial assessment table extracts the date from the first clinician initial assesment. If multiple clinician initial assessments are completed then the first is used. This table is used in case there is no psy initial assessment date provided. 
+first_clinician_initial_assessment AS (
+SELECT 
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date) eec.entry_encounter_id,
+		pmia.date::date
+	FROM entry_exit_cte eec
+	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
+		ON eec.patient_id = pmia.patient_id
+	WHERE pmia.date >= eec.intake_date AND (pmia.date <= eec.discharge_date OR eec.discharge_date IS NULL)
+	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date, pmia.date
+	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date, pmia.date ASC),
 -- The Syndrome sub-tables pivot syndrome data horizontally from the MH counselor initial assessment form. If more than one form is filled per cohort entry period than the data from the last form is reported. 
 syndrome_pivot_cte AS (
 	SELECT 
@@ -270,9 +281,9 @@ SELECT
 		ELSE NULL
 	END AS age_group_admission,
 	pdd.gender,
-	pad.state_province AS governaorate, 
+	pad.state_province AS governorate, 
 	pad.city_village AS community_village,
-	pad.address1 AS area,
+	pad.address2 AS area,
 	pa."Legal_status",
 	pa."Civil_status",
 	pa."Education_level",
@@ -280,12 +291,16 @@ SELECT
 	pa."Personal_Situation",
 	pa."Living_conditions",
 	eec.intake_date, 
-	fpia.date AS enrollment_date,
+	CASE 
+		WHEN fpia.date IS NOT NULL THEN fpia.date
+		WHEN fpia.date IS NULL THEN fcia.date
+		ELSE NULL
+	END	AS enrollment_date,
 	eec.discharge_date,
 	CASE 
-		WHEN pa."Patient_code" IS NULL THEN 'Waiting List'
-		WHEN pa."Patient_code" IS NOT NULL THEN 'In Cohort'
-		ELSE null
+		WHEN fpia.date IS NULL AND fcia.date IS NULL AND eec.discharge_date IS NULL THEN 'waiting list'
+		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NULL THEN 'in cohort'
+		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NOT NULL THEN 'discharge'
 	END AS status,
 	mhi.visit_location AS entry_visit_location,
 	CASE 
@@ -387,6 +402,8 @@ LEFT OUTER JOIN patient_encounter_details_default ped
 	ON eec.entry_encounter_id = ped.encounter_id
 LEFT OUTER JOIN first_psy_initial_assessment fpia
 	ON eec.entry_encounter_id = fpia.entry_encounter_id
+LEFT OUTER JOIN first_clinician_initial_assessment fcia
+	ON eec.entry_encounter_id = fcia.entry_encounter_id
 LEFT OUTER JOIN mental_health_intake mhi
 	ON eec.entry_encounter_id = mhi.encounter_id
 LEFT OUTER JOIN last_syndrome_cte lsc 
