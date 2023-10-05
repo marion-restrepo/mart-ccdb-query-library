@@ -233,7 +233,7 @@ SELECT
 FROM entry_exit_cte eec
 LEFT OUTER JOIN medication_data_default mdd
 	ON eec.patient_id = mdd.patient_id
-WHERE mdd.start_date >= eec.intake_date AND (mdd.start_date <= eec.discharge_date OR eec.discharge_date IS NULL) AND mdd.coded_drug_name IS NOT NULL AND mdd.coded_drug_name != 'FOLIC acid, 5 mg, tab.'),
+WHERE mdd.start_date >= eec.intake_date AND (mdd.start_date <= eec.discharge_date OR eec.discharge_date IS NULL) AND mdd.coded_drug_name IS NOT NULL AND mdd.coded_drug_name != 'IBUPROFEN, 400 mg, tab.' AND mdd.coded_drug_name != 'PARACETAMOL (acetaminophen), 500 mg, tab.'),
 -- The visit location sub-table finds the last visit location reported across all clinical consultaiton/session forms.
 last_visit_location_cte AS (	
 	SELECT 
