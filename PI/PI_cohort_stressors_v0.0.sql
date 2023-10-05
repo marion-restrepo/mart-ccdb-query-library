@@ -80,6 +80,7 @@ stressors_cte AS (
 SELECT 
 	pi."Patient_Identifier",
 	eec.patient_id,
+	eec.entry_encounter_id,
 	pdd.age AS age_current,
 	CASE 
 		WHEN pdd.age::int <= 3 THEN '0-3'
@@ -100,11 +101,17 @@ SELECT
 	END AS age_group_admission,
 	pdd.gender,
 	eec.intake_date, 
+	CASE 
+		WHEN fpia.date IS NOT NULL THEN fpia.date
+		WHEN fpia.date IS NULL THEN fcia.date
+		ELSE NULL
+	END	AS enrollment_date,
 	eec.discharge_date,
 	CASE 
-		WHEN eec.discharge_date IS NULL THEN 'Yes'
-		ELSE null
-	END AS active,	
+		WHEN fpia.date IS NULL AND fcia.date IS NULL AND eec.discharge_date IS NULL THEN 'waiting list'
+		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NULL THEN 'in cohort'
+		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NOT NULL THEN 'discharge'
+	END AS status,	
 	mhi.visit_location AS entry_visit_location,
 	lvlc.visit_location,
 	sc.stressor
