@@ -86,7 +86,7 @@ initial_cgis_cte AS (
 		ON eec.patient_id = pmia.patient_id
 	LEFT OUTER JOIN psy_counselors_initial_assessment pcia
 		ON eec.patient_id = pcia.patient_id
-	WHERE pmia.date::date >= eec.intake_date AND (pmia.date::date <= eec.discharge_date OR eec.discharge_date IS NULL) AND pcia.date::date >= eec.intake_date AND (pcia.date::date <= eec.discharge_date OR eec.discharge_date IS NULL)
+	WHERE (pmia.date::date >= eec.intake_date AND (pmia.date::date <= eec.discharge_date OR eec.discharge_date IS NULL)) OR (pcia.date::date >= eec.intake_date AND (pcia.date::date <= eec.discharge_date OR eec.discharge_date IS NULL))
 	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date, pmia.date::date DESC, pcia.date::date DESC),
 -- The Mental Health diagnosis sub-tables pivot mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported are present. 
 last_mh_main_dx_cte AS (
