@@ -11,7 +11,7 @@ entry_exit_cte AS (
 	LEFT OUTER JOIN entry_cte_2 ec2
 		ON ec1.entry_id_1::int = ec2.entry_id_2::int
 	LEFT OUTER JOIN (SELECT patient_id, discharge_date, encounter_id FROM mental_health_discharge) mhd
-		ON ec1.patient_id = mhd.patient_id AND mhd.discharge_date > ec1.entry_date AND (mhd.discharge_date < ec2.entry_date OR ec2.entry_date IS NULL)),
+		ON ec1.patient_id = mhd.patient_id AND mhd.discharge_date >= ec1.entry_date AND (mhd.discharge_date < ec2.entry_date OR ec2.entry_date IS NULL)),
 -- The Syndrome sub-tables pivot syndrome data horizontally from the MH counselor initial assessment form. If more than one form is filled per cohort entry period than the data from the last form is reported. 
 syndrome_pivot_cte AS (
 	SELECT 
