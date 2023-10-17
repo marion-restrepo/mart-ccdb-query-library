@@ -11,7 +11,7 @@ entry_exit_cte AS (
 	LEFT OUTER JOIN intake_cte_2 ic2
 		ON ic1.entry_id_1::int = ic2.entry_id_2::int
 	LEFT OUTER JOIN (SELECT patient_id, discharge_date, encounter_id FROM mental_health_discharge) mhd
-		ON ic1.patient_id = mhd.patient_id AND mhd.discharge_date > ic1.intake_date AND (mhd.discharge_date < ic2.intake_date OR ic2.intake_date IS NULL)),
+		ON ic1.patient_id = mhd.patient_id AND mhd.discharge_date >= ic1.intake_date AND (mhd.discharge_date < ic2.intake_date OR ic2.intake_date IS NULL)),
 -- The first psy initial assessment table extracts the date from the psy initial assessment as the cohort entry date. If multiple initial assessments are completed then the first is used.
 first_psy_initial_assessment AS (
 SELECT 
