@@ -380,7 +380,7 @@ SELECT
 	pfic.psychiatrist_fu_individual_sessions,
 	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) AS psychiatrist_individual_sessions,
 	pfoc.psychiatrist_fu_other_sessions,
-	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) + COALESCE(pfoc.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
+	COALESCE(pic.psychiatrist_initial_consultations,0) + COALESCE(pfic.psychiatrist_fu_individual_sessions,0) + COALESCE(pfoc.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions--,
 	--ppc.psychotropic_prescription
 FROM entry_exit_cte eec
 LEFT OUTER JOIN patient_identifier pi
