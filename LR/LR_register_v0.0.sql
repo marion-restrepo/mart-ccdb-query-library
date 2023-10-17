@@ -6,7 +6,7 @@ entry_cte_1 AS (
 	SELECT patient_id, entry_encounter_id, entry_date, entry_id_2::int+one AS entry_id_1
 	FROM entry_cte_2),
 entry_exit_cte AS (
-	SELECT ec1.patient_id, ec1.entry_encounter_id, ec1.entry_date, CASE WHEN ec2.entry_date IS NOT NULL THEN 1 ELSE null END as readmission, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
+	SELECT ec1.patient_id, ec1.entry_encounter_id, ec1.entry_date, CASE WHEN ec2.entry_date IS NOT NULL THEN 1 ELSE NULL END AS readmission, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
 	FROM entry_cte_1 ec1
 	LEFT OUTER JOIN entry_cte_2 ec2
 		ON ec1.entry_id_1::int = ec2.entry_id_2::int
