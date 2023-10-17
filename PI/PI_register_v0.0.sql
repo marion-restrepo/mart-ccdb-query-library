@@ -6,7 +6,7 @@ intake_cte_1 AS (
 	SELECT patient_id, entry_encounter_id, intake_date, entry_id_2::int+one AS entry_id_1
 	FROM intake_cte_2),
 entry_exit_cte AS (
-	SELECT ic1.patient_id, ic1.entry_encounter_id, ic1.intake_date, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
+	SELECT ic1.patient_id, ic1.entry_encounter_id, ic1.intake_date, CASE WHEN ic2.intake_date IS NOT NULL THEN 1 ELSE NULL END AS readmission, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
 	FROM intake_cte_1 ic1
 	LEFT OUTER JOIN intake_cte_2 ic2
 		ON ic1.entry_id_1::int = ic2.entry_id_2::int
@@ -300,6 +300,7 @@ SELECT
 		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NULL THEN 'in cohort'
 		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND eec.discharge_date IS NOT NULL THEN 'discharge'
 	END AS status,
+	eec.readmission,
 	mhi.visit_location AS entry_visit_location,
 	CASE 
 		WHEN lvlc.visit_location IS NOT NULL THEN lvlc.visit_location
