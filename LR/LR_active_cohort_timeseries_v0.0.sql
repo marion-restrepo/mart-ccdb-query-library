@@ -142,7 +142,7 @@ active_patients AS (
 range_values AS (
 	SELECT 
 		date_trunc('day',min(ap.entry_date)) AS minval,
-		date_trunc('day',max(ap.entry_date)) AS maxval
+		date_trunc('day',max(ap.discharge_date)) AS maxval
 	FROM active_patients AS ap),
 day_range AS (
 	SELECT 
@@ -175,6 +175,13 @@ daily_admissions_mhepi AS (
 	FROM active_patients AS ap
 	WHERE cohort = 'Mental health/epilepsy'
 	GROUP BY 1),
+daily_admissions_sud AS (
+	SELECT 
+		date_trunc('day', ap.entry_date) AS day,
+		count(*) AS patients
+	FROM active_patients AS ap
+	WHERE cohort = 'Substance use disorders'
+	GROUP BY 1),
 daily_exits_total AS (
 	SELECT
 		date_trunc('day',ap.discharge_date) AS day,
@@ -202,6 +209,13 @@ daily_exits_mhepi AS (
 	FROM active_patients AS ap
 	WHERE cohort = 'Mental health/epilepsy'
 	GROUP BY 1),
+daily_exits_sud AS (
+	SELECT
+		date_trunc('day',ap.discharge_date) AS day,
+		count(*) AS patients
+	FROM active_patients AS ap
+	WHERE cohort = 'Substance use disorders'
+	GROUP BY 1),
 daily_active_patients AS (
 	SELECT 
 		dr.day as reporting_day,
@@ -209,6 +223,7 @@ daily_active_patients AS (
 		sum(damh.patients) over (order by dr.day asc rows between unbounded preceding and current row) AS cumulative_admissions_mh,
 		sum(dae.patients) over (order by dr.day asc rows between unbounded preceding and current row) AS cumulative_admissions_epi,
 		sum(damhe.patients) over (order by dr.day asc rows between unbounded preceding and current row) AS cumulative_admissions_mhepi,
+		sum(dasud.patients) over (order by dr.day asc rows between unbounded preceding and current row) AS cumulative_admissions_sud,
 		CASE
 		    WHEN sum(det.patients) over (order by dr.day asc rows between unbounded preceding and current row) IS NULL
 		    THEN 0
@@ -229,6 +244,11 @@ daily_active_patients AS (
 		    THEN 0
 		    ELSE sum(demhe.patients) over (order by dr.day asc rows between unbounded preceding and current row) 
 		END AS cumulative_exits_mhepi, 
+		CASE
+		    WHEN sum(desud.patients) over (order by dr.day asc rows between unbounded preceding and current row) IS NULL
+		    THEN 0
+		    ELSE sum(desud.patients) over (order by dr.day asc rows between unbounded preceding and current row) 
+		END AS cumulative_exits_sud, 
 		CASE
 		    WHEN sum(det.patients) over (order by dr.day asc rows between unbounded preceding and current row) IS NULL 
 			THEN sum(dat.patients) over (order by dr.day asc rows between unbounded preceding and current row)
@@ -253,6 +273,12 @@ daily_active_patients AS (
 		    ELSE (sum(damhe.patients) over (order by dr.day asc rows between unbounded preceding and current row)-
 				sum(demhe.patients) over (order by dr.day asc rows between unbounded preceding and current row)) 
 		END AS active_patients_mhepi,
+		CASE
+		    WHEN sum(desud.patients) over (order by dr.day asc rows between unbounded preceding and current row) IS NULL 
+			THEN sum(dasud.patients) over (order by dr.day asc rows between unbounded preceding and current row)
+		    ELSE (sum(dasud.patients) over (order by dr.day asc rows between unbounded preceding and current row)-
+				sum(desud.patients) over (order by dr.day asc rows between unbounded preceding and current row)) 
+		END AS active_patients_sud,
 		CASE 
 			WHEN date(dr.day)::date = (date_trunc('MONTH', dr.day) + INTERVAL '1 MONTH - 1 day')::date THEN 1
 		END AS last_day_of_month
@@ -261,17 +287,20 @@ daily_active_patients AS (
 	LEFT OUTER JOIN daily_admissions_mh damh ON dr.day = damh.day
 	LEFT OUTER JOIN daily_admissions_epi dae ON dr.day = dae.day
 	LEFT OUTER JOIN daily_admissions_mhepi damhe ON dr.day = damhe.day
+	LEFT OUTER JOIN daily_admissions_sud dasud ON dr.day = dasud.day
 	LEFT OUTER JOIN daily_exits_total det ON dr.day = det.day
 	LEFT OUTER JOIN daily_exits_mh demh ON dr.day = demh.day
 	LEFT OUTER JOIN daily_exits_epi dee ON dr.day = dee.day
-	LEFT OUTER JOIN daily_exits_mhepi demhe ON dr.day = demhe.day)
+	LEFT OUTER JOIN daily_exits_mhepi demhe ON dr.day = demhe.day
+	LEFT OUTER JOIN daily_exits_sud desud ON dr.day = desud.day)
 -- Main query --
 SELECT 
 	dap.reporting_day,
 	dap.active_patients_total,
 	dap.active_patients_mh,
 	dap.active_patients_epi,
-	dap.active_patients_mhepi
+	dap.active_patients_mhepi,
+	dap.active_patients_sud
 FROM daily_active_patients dap
 WHERE dap.last_day_of_month = 1 and dap.reporting_day > date_trunc('MONTH', CURRENT_DATE) - INTERVAL '1 year'
-GROUP BY dap.reporting_day, dap.active_patients_total, dap.active_patients_mh, dap.active_patients_epi, dap.active_patients_mhepi;
+GROUP BY dap.reporting_day, dap.active_patients_total, dap.active_patients_mh, dap.active_patients_epi, dap.active_patients_mhepi, dap.active_patients_sud;
