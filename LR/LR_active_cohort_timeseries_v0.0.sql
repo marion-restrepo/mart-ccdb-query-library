@@ -142,7 +142,7 @@ active_patients AS (
 range_values AS (
 	SELECT 
 		date_trunc('day',min(ap.entry_date)) AS minval,
-		date_trunc('day',max(ap.discharge_date)) AS maxval
+		date_trunc('day',CURRENT_DATE) AS maxval
 	FROM active_patients AS ap),
 day_range AS (
 	SELECT 
