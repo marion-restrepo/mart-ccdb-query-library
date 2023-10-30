@@ -1,19 +1,16 @@
--- The first 3 sub-tables of the query build the frame for monitoring patient entry to and exit from the cohort/active treatment. The table is build by listing all entry dates as recorded in the MH intake form. For each exit date is matched to an intake following the logic that is occurs after the entry date but not before the next entry date, in the case that a patient enters the cohort more than once.
-WITH entry_cte_2 AS (
-	SELECT patient_id, encounter_id AS entry_encounter_id, date::date AS entry_date, CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry_id_2, 1 AS one
+-- The first CTEs build the frame for patients entering and exiting the cohort. This frame is based on the MH intake form and the MH discharge form. The query takes all intake dates and matches discharge dates if the discharge date falls between the intake date and the next intake date (if present).
+WITH intake AS (
+	SELECT 
+		patient_id, encounter_id AS intake_encounter_id, date AS intake_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS intake_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_intake_date
 	FROM mental_health_intake),
-entry_cte_1 AS (
-	SELECT patient_id, entry_encounter_id, entry_date, entry_id_2::int+one AS entry_id_1
-	FROM entry_cte_2),
-entry_exit_cte AS (
-	SELECT ec1.patient_id, ec1.entry_encounter_id, ec1.entry_date, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
-	FROM entry_cte_1 ec1
-	LEFT OUTER JOIN entry_cte_2 ec2
-		ON ec1.entry_id_1::int = ec2.entry_id_2::int
-	LEFT OUTER JOIN (SELECT patient_id, discharge_date, encounter_id FROM mental_health_discharge) mhd
-		ON ec1.patient_id = mhd.patient_id AND mhd.discharge_date >= ec1.entry_date AND (mhd.discharge_date < ec2.entry_date OR ec2.entry_date IS NULL)),
--- The NCD diagnosis sub-tables pivot NCD diagnosis data horizontally from the NCD form. Only the last diagnoses reported are present. 
-ncd_diagnosis_pivot_cte AS (
+cohort AS (
+	SELECT
+		i.patient_id, i.intake_encounter_id, i.intake_date, CASE WHEN i.intake_order > 1 THEN 'Yes' END readmission, mhd.encounter_id AS discharge_encounter_id, mhd.discharge_date
+	FROM intake i
+	LEFT JOIN mental_health_discharge mhd 
+		ON i.patient_id = mhd.patient_id AND mhd.discharge_date >= i.intake_date AND (mhd.discharge_date < i.next_intake_date OR i.next_intake_date IS NULL)),
+-- The NCD diagnosis CTEs pivot NCD diagnosis data horizontally from the NCD form. Only the last diagnoses reported per cohort enrollment are present. 
+ncd_diagnosis_pivot AS (
 	SELECT 
 		DISTINCT ON (n.encounter_id, n.patient_id, n.date::date) n.encounter_id, 
 		n.patient_id, 
@@ -27,78 +24,65 @@ ncd_diagnosis_pivot_cte AS (
 		ON d.encounter_id = n.encounter_id AND d.diagnosis IS NOT NULL 
 	WHERE d.diagnosis IS NOT NULL 
 	GROUP BY n.encounter_id, n.patient_id, n.date::date),
-last_ncd_diagnosis_cte AS (
+last_ncd_diagnosis AS (
 	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id) eec.patient_id,
-		eec.entry_encounter_id,
-		eec.entry_date, 
-		eec.discharge_encounter_id,
-		eec.discharge_date, 
-		ndpc.date::date,
-		ndpc.focal_epilepsy,
-		ndpc.generalised_epilepsy,
-		ndpc.unclassified_epilepsy,
-		ndpc.other_ncd
-	FROM entry_exit_cte eec
-	LEFT OUTER JOIN ncd_diagnosis_pivot_cte ndpc 
-		ON eec.patient_id = ndpc.patient_id AND eec.entry_date <= ndpc.date AND CASE WHEN eec.discharge_date IS NOT NULL THEN eec.discharge_date ELSE current_date END >= ndpc.date
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, ndpc.date, ndpc.focal_epilepsy, ndpc.generalised_epilepsy, ndpc.unclassified_epilepsy, ndpc.other_ncd
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, ndpc.date DESC),
-last_ncd_wdx_cte AS (
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		ndp.date::date,
+		ndp.focal_epilepsy,
+		ndp.generalised_epilepsy,
+		ndp.unclassified_epilepsy,
+		ndp.other_ncd
+	FROM cohort c
+	LEFT OUTER JOIN ncd_diagnosis_pivot ndp 
+		ON c.patient_id = ndp.patient_id AND c.intake_date <= ndp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ndp.date
+	WHERE ndp.date IS NOT NULL
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, ndp.date, ndp.focal_epilepsy, ndp.generalised_epilepsy, ndp.unclassified_epilepsy, ndp.other_ncd
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, ndp.date DESC),
+-- The Mental Health diagnosis CTE pivots mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported per cohort enrollment are present. 
+last_mh_main_dx AS (
 	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id) eec.patient_id,
-		eec.entry_encounter_id,
-		eec.entry_date, 
-		eec.discharge_encounter_id,
-		eec.discharge_date, 
-		nwd.date,
-		nwd.encounter_id
-	FROM entry_exit_cte eec
-	LEFT OUTER JOIN (SELECT DISTINCT n.encounter_id, n.patient_id, n.date FROM ncd n LEFT OUTER JOIN diagnosis d ON n.encounter_id = d.encounter_id WHERE d.diagnosis IS NOT NULL) nwd 
-		ON eec.patient_id = nwd.patient_id AND eec.entry_date <= nwd.date AND CASE WHEN eec.discharge_date IS NOT NULL THEN eec.discharge_date ELSE current_date END >= nwd.date
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, nwd.date, nwd.encounter_id
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, nwd.date DESC),
--- The Mental Health diagnosis sub-tables pivot mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported are present. 
-last_mh_main_dx_cte AS (
-	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id) eec.patient_id,
-		eec.entry_encounter_id,
-		eec.entry_date, 
-		eec.discharge_encounter_id,
-		eec.discharge_date,
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date,
 		mmhd.date,
-		CASE WHEN mmhd.main_diagnosis = 'None' THEN NULL WHEN mmhd.main_diagnosis = 'Other' THEN 'Other mental health diagnosis' WHEN mmhd.main_diagnosis != 'Other' OR mmhd.main_diagnosis != 'None' THEN mmhd.main_diagnosis ELSE NULL END AS diagnosis
-	FROM entry_exit_cte eec
+		mmhd.main_diagnosis AS diagnosis
+	FROM cohort c
 	LEFT OUTER JOIN (
 		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
 		UNION
 		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON eec.patient_id = mmhd.patient_id AND eec.entry_date <= mmhd.date::date AND CASE WHEN eec.discharge_date IS NOT NULL THEN eec.discharge_date ELSE current_date END >= mmhd.date::date
+		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
 	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, mmhd.date::date DESC),
-last_mh_sec_dx_cte AS (
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date,	mmhd.main_diagnosis 
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
+last_mh_sec_dx AS (
 	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id) eec.patient_id,
-		eec.entry_encounter_id,
-		eec.entry_date, 
-		eec.discharge_encounter_id,
-		eec.discharge_date,
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date,
 		mmhd.date,
-		CASE WHEN mmhd.secondary_diagnosis = 'None' THEN NULL WHEN mmhd.secondary_diagnosis = 'Other' THEN 'Other mental health diagnosis' WHEN mmhd.secondary_diagnosis != 'Other' OR mmhd.secondary_diagnosis != 'None' THEN mmhd.secondary_diagnosis ELSE NULL END AS diagnosis
-	FROM entry_exit_cte eec
+		mmhd.secondary_diagnosis AS diagnosis
+	FROM cohort c
 	LEFT OUTER JOIN (
 		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
 		UNION
 		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON eec.patient_id = mmhd.patient_id AND eec.entry_date <= mmhd.date::date AND CASE WHEN eec.discharge_date IS NOT NULL THEN eec.discharge_date ELSE current_date END >= mmhd.date::date
+		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
 	WHERE mmhd.secondary_diagnosis IS NOT NULL 
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_encounter_id, eec.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, mmhd.date::date DESC),
-last_mh_diagnosis_cte AS (
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
+last_mh_diagnosis AS (
 	SELECT 
-		DISTINCT ON (mhdu.patient_id, entry_encounter_id) mhdu.patient_id, 
-		entry_encounter_id,
+		DISTINCT ON (mhdu.patient_id, intake_encounter_id) mhdu.patient_id, 
+		intake_encounter_id,
 		MAX (CASE WHEN mhdu.diagnosis = 'Acute and transient psychotic disorder' THEN 1 ELSE NULL END) AS acute_transient_psychotic_disorder,	
 		MAX (CASE WHEN mhdu.diagnosis = 'Acute stress reaction' THEN 1 ELSE NULL END) AS acute_stress_reaction,	
 		MAX (CASE WHEN mhdu.diagnosis = 'Adjustment disorders' THEN 1 ELSE NULL END) AS adjustment_disorders,	
@@ -128,16 +112,16 @@ last_mh_diagnosis_cte AS (
 		MAX (CASE WHEN mhdu.diagnosis = 'Severe depressive episode without psychotic symptoms' THEN 1 ELSE NULL END) AS severe_depressive_episode_without_psychotic_symptoms,
 		MAX (CASE WHEN mhdu.diagnosis = 'Somatoform disorders' THEN 1 ELSE NULL END) AS somatoform_disorders,
 		MAX (CASE WHEN mhdu.diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_mh
-	FROM (SELECT patient_id, entry_encounter_id, diagnosis FROM last_mh_main_dx_cte
+	FROM (SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_main_dx
 	UNION
-	SELECT patient_id, entry_encounter_id, diagnosis FROM last_mh_sec_dx_cte) mhdu
-	GROUP BY mhdu.patient_id, entry_encounter_id),
--- The visit location sub-table finds the last visit location reported across all clinical consultaiton/session forms.
-last_visit_location_cte AS (	
+	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
+	GROUP BY mhdu.patient_id, intake_encounter_id),
+-- The visit location CTE finds the last visit location reported across all clinical consultaiton/session forms per cohort enrollment.
+last_visit_location AS (	
 	SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date) eec.entry_encounter_id,
-		vlc.visit_location AS visit_location
-	FROM entry_exit_cte eec
+		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
+		vl.visit_location AS visit_location
+	FROM cohort c
 	LEFT OUTER JOIN (
 		SELECT n.date::date, n.patient_id, n.visit_location FROM ncd n WHERE n.visit_location IS NOT NULL 
 		UNION
@@ -149,28 +133,26 @@ last_visit_location_cte AS (
 		UNION
 		SELECT pmfu.date::date, pmfu.patient_id, pmfu.visit_location FROM psychiatrist_mhgap_follow_up pmfu WHERE pmfu.visit_location IS NOT NULL
 		UNION
-		SELECT mhd.discharge_date::date AS date, mhd.patient_id, mhd.location AS visit_location FROM mental_health_discharge mhd WHERE mhd.location IS NOT NULL) vlc
-		ON eec.patient_id = vlc.patient_id
-	WHERE vlc.date >= eec.entry_date AND (vlc.date <= eec.discharge_date OR eec.discharge_date IS NULL)
-	GROUP BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, vlc.date, vlc.visit_location
-	ORDER BY eec.patient_id, eec.entry_encounter_id, eec.entry_date, eec.discharge_date, vlc.date DESC),
--- The all diagnosis sub-table combines a list of the last reported NCD and mental health diagnosis for each cohort entry.
+		SELECT mhd.discharge_date AS date, mhd.patient_id, mhd.location AS visit_location FROM mental_health_discharge mhd WHERE mhd.location IS NOT NULL) vl
+		ON c.patient_id = vl.patient_id
+	WHERE vl.date >= c.intake_date AND (vl.date <= c.discharge_date OR c.discharge_date IS NULL)
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date, vl.visit_location
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC),
+-- The all diagnosis CTE combines a list of the last reported NCD and mental health diagnosis for each cohort enrollment.
 all_diagnosis AS (
-	SELECT mdx.patient_id, mdx.entry_encounter_id, mdx.date, mdx.diagnosis 
-	FROM last_mh_main_dx_cte mdx
+	SELECT mdx.patient_id, mdx.intake_encounter_id, mdx.date, mdx.diagnosis 
+	FROM last_mh_main_dx mdx
 	UNION
-	SELECT sdx.patient_id, sdx.entry_encounter_id, sdx.date, sdx.diagnosis 
-	FROM last_mh_sec_dx_cte sdx
+	SELECT sdx.patient_id, sdx.intake_encounter_id, sdx.date, sdx.diagnosis 
+	FROM last_mh_sec_dx sdx
 	UNION
 	SELECT 
-		lnwc.patient_id, lnwc.entry_encounter_id, lnwc.date, CASE WHEN d.diagnosis = 'Other' THEN 'Other epilepsy diagnosis' ELSE d.diagnosis END AS diagnosis 
-	FROM diagnosis d
-	LEFT OUTER JOIN last_ncd_wdx_cte lnwc
-		ON d.encounter_id = lnwc.encounter_id AND lnwc.encounter_id IS NOT NULL)
+		lndx.patient_id, lndx.intake_encounter_id, lndx.date, CASE WHEN lndx.focal_epilepsy IS NOT NULL THEN 'Focal epilepsy' WHEN lndx.generalised_epilepsy IS NOT NULL THEN 'Generalised epilepsy' WHEN lndx.unclassified_epilepsy IS NOT NULL THEN 'Unclassified epilepsy' WHEN lndx.other_ncd IS NOT NULL THEN 'Other epilepsy diagnosis' ELSE NULL END AS diagnosis 
+	FROM last_ncd_diagnosis lndx)
 -- Main query --
 SELECT 
 	pi."Patient_Identifier",
-	eec.patient_id,
+	c.patient_id,
 	pdd.age AS age_current,
 	CASE 
 		WHEN pdd.age::int <= 3 THEN '0-3'
@@ -191,39 +173,39 @@ SELECT
 	END AS age_group_admission,
 	pdd.gender,
 	CASE
-		WHEN (ncddc.focal_epilepsy IS NOT NULL OR ncddc.generalised_epilepsy IS NOT NULL OR ncddc.unclassified_epilepsy IS NOT NULL OR ncddc.other_ncd IS NOT NULL) AND 
-			mhdc.acute_transient_psychotic_disorder IS NULL AND mhdc.acute_stress_reaction IS NULL AND mhdc.adjustment_disorders IS NULL AND mhdc.anxiety_disorder IS NULL AND mhdc.bipolar_disorder IS NULL AND mhdc.childhood_emotional_disorder IS NULL AND mhdc.conduct_disorders IS NULL AND mhdc.delirium IS NULL AND mhdc.dementia IS NULL AND mhdc.dissociative_conversion_disorder IS NULL AND mhdc.dissociative_convulsions IS NULL AND mhdc.hyperkinetic_disorder IS NULL AND mhdc.intellectual_disability IS NULL AND mhdc.disorders_due_drug_psychoactive_substances IS NULL AND mhdc.disorders_due_alcohol IS NULL AND mhdc.mild_depressive_episode IS NULL AND mhdc.moderate_depressive_episode IS NULL AND mhdc.nonorganic_enuresis IS NULL AND mhdc.obsessive_compulsive_disorder IS NULL AND mhdc.panic_disorder IS NULL AND mhdc.pervasive_developmental_disorder IS NULL AND mhdc.postpartum_depression IS NULL AND mhdc.postpartum_psychosis IS NULL AND mhdc.ptsd IS NULL AND mhdc.schizophrenia IS NULL AND mhdc.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdc.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdc.somatoform_disorders IS NULL AND mhdc.other_mh IS NULL THEN 'Epilepsy'
-		WHEN (mhdc.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdc.disorders_due_alcohol IS NOT NULL) AND 
-			ncddc.focal_epilepsy IS NULL AND ncddc.generalised_epilepsy IS NULL AND ncddc.unclassified_epilepsy IS NULL AND ncddc.other_ncd IS NULL THEN 'Substance use disorders'
-		WHEN (mhdc.acute_transient_psychotic_disorder IS NOT NULL OR mhdc.acute_stress_reaction IS NOT NULL OR mhdc.adjustment_disorders IS NOT NULL OR mhdc.anxiety_disorder IS NOT NULL OR mhdc.bipolar_disorder IS NOT NULL OR mhdc.childhood_emotional_disorder IS NOT NULL OR mhdc.conduct_disorders IS NOT NULL OR mhdc.delirium IS NOT NULL OR mhdc.dementia IS NOT NULL OR mhdc.dissociative_conversion_disorder IS NOT NULL OR mhdc.dissociative_convulsions IS NOT NULL OR mhdc.hyperkinetic_disorder IS NOT NULL OR mhdc.intellectual_disability IS NOT NULL OR mhdc.mild_depressive_episode IS NOT NULL OR mhdc.moderate_depressive_episode IS NOT NULL OR mhdc.nonorganic_enuresis IS NOT NULL OR mhdc.obsessive_compulsive_disorder IS NOT NULL OR mhdc.panic_disorder IS NOT NULL OR mhdc.pervasive_developmental_disorder IS NOT NULL OR mhdc.postpartum_depression IS NOT NULL OR mhdc.postpartum_psychosis IS NOT NULL OR mhdc.ptsd IS NOT NULL OR mhdc.schizophrenia IS NOT NULL OR mhdc.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdc.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdc.somatoform_disorders IS NOT NULL OR mhdc.other_mh IS NOT NULL) AND 
-			ncddc.focal_epilepsy IS NULL AND ncddc.generalised_epilepsy IS NULL AND ncddc.unclassified_epilepsy IS NULL AND ncddc.other_ncd IS NULL THEN 'Mental health'
-		WHEN (mhdc.acute_transient_psychotic_disorder IS NOT NULL OR mhdc.acute_stress_reaction IS NOT NULL OR mhdc.adjustment_disorders IS NOT NULL OR mhdc.anxiety_disorder IS NOT NULL OR mhdc.bipolar_disorder IS NOT NULL OR mhdc.childhood_emotional_disorder IS NOT NULL OR mhdc.conduct_disorders IS NOT NULL OR mhdc.delirium IS NOT NULL OR mhdc.dementia IS NOT NULL OR mhdc.dissociative_conversion_disorder IS NOT NULL OR mhdc.dissociative_convulsions IS NOT NULL OR mhdc.hyperkinetic_disorder IS NOT NULL OR mhdc.intellectual_disability IS NOT NULL OR mhdc.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdc.disorders_due_alcohol IS NOT NULL OR mhdc.mild_depressive_episode IS NOT NULL OR mhdc.moderate_depressive_episode IS NOT NULL OR mhdc.nonorganic_enuresis IS NOT NULL OR mhdc.obsessive_compulsive_disorder IS NOT NULL OR mhdc.panic_disorder IS NOT NULL OR mhdc.pervasive_developmental_disorder IS NOT NULL OR mhdc.postpartum_depression IS NOT NULL OR mhdc.postpartum_psychosis IS NOT NULL OR mhdc.ptsd IS NOT NULL OR mhdc.schizophrenia IS NOT NULL OR mhdc.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdc.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdc.somatoform_disorders IS NOT NULL OR mhdc.other_mh IS NOT NULL) AND 
-			(ncddc.focal_epilepsy IS NOT NULL OR ncddc.generalised_epilepsy IS NOT NULL OR ncddc.unclassified_epilepsy IS NOT NULL OR ncddc.other_ncd IS NOT NULL) THEN 'Mental health/epilepsy'
+		WHEN (ncddx.focal_epilepsy IS NOT NULL OR ncddx.generalised_epilepsy IS NOT NULL OR ncddx.unclassified_epilepsy IS NOT NULL OR ncddx.other_ncd IS NOT NULL) AND 
+			mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL THEN 'Epilepsy'
+		WHEN (mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL) AND 
+			ncddx.focal_epilepsy IS NULL AND ncddx.generalised_epilepsy IS NULL AND ncddx.unclassified_epilepsy IS NULL AND ncddx.other_ncd IS NULL THEN 'Substance use disorders'
+		WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND 
+			ncddx.focal_epilepsy IS NULL AND ncddx.generalised_epilepsy IS NULL AND ncddx.unclassified_epilepsy IS NULL AND ncddx.other_ncd IS NULL THEN 'Mental health'
+		WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND 
+			(ncddx.focal_epilepsy IS NOT NULL OR ncddx.generalised_epilepsy IS NOT NULL OR ncddx.unclassified_epilepsy IS NOT NULL OR ncddx.other_ncd IS NOT NULL) THEN 'Mental health/epilepsy'
 		ELSE NULL 
 	END AS cohort,
-	eec.entry_date, 
-	eec.discharge_date,
+	c.intake_date AS entry_date, 
+	c.discharge_date,
 	CASE 
-		WHEN eec.discharge_date IS NULL THEN 'Yes'
-		ELSE null
+		WHEN c.discharge_date IS NULL THEN 'Yes'
+		ELSE NULL 
 	END AS active,	
 	mhi.visit_location AS entry_visit_location,
-	lvlc.visit_location,
+	lvl.visit_location,
 	adx.diagnosis
 FROM all_diagnosis adx
-LEFT OUTER JOIN entry_exit_cte eec
-	ON adx.entry_encounter_id = eec.entry_encounter_id
+LEFT OUTER JOIN cohort c
+	ON adx.intake_encounter_id = c.intake_encounter_id
 LEFT OUTER JOIN patient_identifier pi
-	ON eec.patient_id = pi.patient_id
+	ON c.patient_id = pi.patient_id
 LEFT OUTER JOIN person_details_default pdd 
-	ON eec.patient_id = pdd.person_id
+	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
-	ON eec.entry_encounter_id = ped.encounter_id
+	ON c.intake_encounter_id = ped.encounter_id
 LEFT OUTER JOIN mental_health_intake mhi
-	ON eec.entry_encounter_id = mhi.encounter_id
-LEFT OUTER JOIN last_ncd_diagnosis_cte ncddc
-	ON eec.entry_encounter_id = ncddc.entry_encounter_id 
-LEFT OUTER JOIN last_mh_diagnosis_cte mhdc
-	ON eec.entry_encounter_id = mhdc.entry_encounter_id 
-LEFT OUTER JOIN last_visit_location_cte lvlc
-	ON eec.entry_encounter_id = lvlc.entry_encounter_id;
+	ON c.intake_encounter_id = mhi.encounter_id
+LEFT OUTER JOIN last_ncd_diagnosis ncddx
+	ON c.intake_encounter_id = ncddx.intake_encounter_id 
+LEFT OUTER JOIN last_mh_diagnosis mhdx
+	ON c.intake_encounter_id = mhdx.intake_encounter_id 
+LEFT OUTER JOIN last_visit_location lvl
+	ON c.intake_encounter_id = lvl.intake_encounter_id;
