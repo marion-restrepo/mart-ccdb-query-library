@@ -350,7 +350,7 @@ SELECT
 	CASE 
 		WHEN mhi.visit_location != lvl.visit_location THEN 'Yes'
 		ELSE NULL
-	END AS diff_clinic,
+	END AS clinic_change,
 	mhi.source_of_initial_patient_referral,
 	CASE WHEN mhi.stressor_1 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_2 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_3 = 'Non-conflict-related medical condition' THEN 1 ELSE NULL END AS "stressor: non-conflict-related medical condition",
 	CASE WHEN mhi.stressor_1 = 'Conflict-related medical condition' THEN 1 WHEN mhi.stressor_2 = 'Conflict-related medical condition' THEN 1 WHEN mhi.stressor_3 = 'Conflict-related medical condition' THEN 1 ELSE NULL END AS "stressor: conflict-related medical condition",
