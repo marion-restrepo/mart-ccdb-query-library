@@ -148,12 +148,13 @@ SELECT
 		c.discharge_date, 
 		n.date::date AS last_visit_date,
 		n.visit_type AS last_visit_type,
-		n.currently_pregnant AS pregnant_last_visit,
-		n.family_planning_counseling AS fp_last_visit,
-		n.hospitalised_since_last_visit AS hospitalised_last_visit,
-		n.missed_medication_doses_in_last_7_days AS missed_medication_last_visit,
-		n.seizures_since_last_visit AS seizures_last_visit,
-		n.exacerbation_per_week AS exacerbations_last_visit
+		CASE WHEN n.currently_pregnant = 'Yes' THEN 'Yes' END AS pregnant_last_visit,
+		CASE WHEN n.family_planning_counseling = 'Yes' THEN 'Yes' END AS fp_last_visit,
+		CASE WHEN n.hospitalised_since_last_visit = 'Yes' THEN 'Yes' END AS hospitalised_last_visit,
+		CASE WHEN n.missed_medication_doses_in_last_7_days = 'Yes' THEN 'Yes' END AS missed_medication_last_visit,
+		CASE WHEN n.seizures_since_last_visit = 'Yes' THEN 'Yes' END AS seizures_last_visit,
+		CASE WHEN n.exacerbation_per_week IS NOT NULL AND n.exacerbation_per_week > 0 THEN 'Yes' END AS exacerbations_last_visit,
+		n.exacerbation_per_week AS nb_exacerbations_last_visit
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
 		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
@@ -374,6 +375,7 @@ SELECT
 	lnv.missed_medication_last_visit,
 	lnv.seizures_last_visit,
 	lnv.exacerbations_last_visit,
+	lnv.nb_exacerbations_last_visit,
 	lee.last_eye_exam_date,
 	lfe.last_foot_exam_date,
 	asev.asthma_severity,
@@ -381,7 +383,7 @@ SELECT
 	lbp.systolic_blood_pressure,
 	lbp.diastolic_blood_pressure,
 	CONCAT(lbp.systolic_blood_pressure,'/',lbp.diastolic_blood_pressure) AS blood_pressure,
-	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 40 THEN 'Yes' END AS blood_pressure_controlled,
+	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 40 THEN 'Yes' END AS blood_pressure_control,
 	lbp.last_bp_date,
 	lbmi.last_bmi,
 	lbmi.last_bmi_date,
@@ -393,6 +395,7 @@ SELECT
 	CASE WHEN lbg.last_hba1c < 8 THEN 'Yes' WHEN lbg.last_hba1c IS NULL AND lfbg.last_fbg < 150 THEN 'Yes' END AS diabetes_control,
 	lgfr.last_gfr,
 	lgfr.last_gfr_date,
+	CASE WHEN lgfr.last_gfr < 30 THEN 'Yes' END AS gfr_control,
 	lc.last_creatinine,
 	lc.last_creatinine_date,	
 	lndx.asthma,
