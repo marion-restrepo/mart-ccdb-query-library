@@ -311,8 +311,8 @@ last_creatinine AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_creatintine_date, 
-		vli.creatinine_mg_dl AS last_creatintine
+		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_creatinine_date, 
+		vli.creatinine_mg_dl AS last_creatinine
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
@@ -327,20 +327,26 @@ SELECT
 	pa."Previous_MSF_code",
 	pdd.age AS age_current,
 	CASE 
-		WHEN pdd.age::int <= 3 THEN '0-3'
-		WHEN pdd.age::int >= 4 AND pdd.age::int <= 7 THEN '04-07'
-		WHEN pdd.age::int >= 8 AND pdd.age::int <= 14 THEN '08-14'
-		WHEN pdd.age::int >= 15 AND pdd.age::int <= 17 THEN '15-17'
-		WHEN pdd.age::int >= 18 THEN '18+'
+		WHEN pdd.age::int <= 4 THEN '0-4'
+		WHEN pdd.age::int >= 5 AND pdd.age::int <= 14 THEN '05-14'
+		WHEN pdd.age::int >= 15 AND pdd.age::int <= 24 THEN '15-24'
+		WHEN pdd.age::int >= 25 AND pdd.age::int <= 34 THEN '25-34'
+		WHEN pdd.age::int >= 35 AND pdd.age::int <= 44 THEN '35-44'
+		WHEN pdd.age::int >= 45 AND pdd.age::int <= 54 THEN '45-54'
+		WHEN pdd.age::int >= 55 AND pdd.age::int <= 64 THEN '55-64'
+		WHEN pdd.age::int >= 65 THEN '65+'
 		ELSE NULL
 	END AS age_group_current,
 	EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) AS age_admission,
 	CASE 
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int <= 3 THEN '0-3'
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 4 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 7 THEN '04-07'
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 8 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 14 THEN '08-14'
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 15 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 17 THEN '15-17'
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 18 THEN '18+'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int <= 4 THEN '0-4'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 5 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 14 THEN '05-14'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 15 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 24 THEN '15-24'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 25 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 34 THEN '25-34'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 35 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 44 THEN '35-44'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 45 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 54 THEN '45-54'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 55 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 64 THEN '55-64'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 65 THEN '65+'
 		ELSE NULL
 	END AS age_group_admission,
 	pdd.gender,
@@ -353,6 +359,8 @@ SELECT
 	pa."Living_conditions",
 	c.initial_visit_date AS enrollment_date,
 	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 6 THEN 'Yes' END AS in_cohort_6m,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 12 THEN 'Yes' END AS in_cohort_12m,
 	c.readmission,
 	c.initial_visit_location,
 	lvl.last_visit_location,
@@ -372,23 +380,28 @@ SELECT
 	so.seizure_onset_age,
 	lbp.systolic_blood_pressure,
 	lbp.diastolic_blood_pressure,
+	CONCAT(lbp.systolic_blood_pressure,'/',lbp.diastolic_blood_pressure) AS blood_pressure,
+	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 40 THEN 'Yes' END AS blood_pressure_controlled,
 	lbp.last_bp_date,
 	lbmi.last_bmi,
 	lbmi.last_bmi_date,
 	lfbg.last_fbg,
 	lfbg.last_fbg_date,
 	lbg.last_hba1c,
+	CASE WHEN lbg.last_hba1c <= 6.5 THEN '0-6.5%' WHEN lbg.last_hba1c BETWEEN 6.6 AND 8 THEN '6.6-8.0%' WHEN lbg.last_hba1c > 8 THEN '>8%' END AS last_hba1c_grouping, 
 	lbg.last_hba1c_date,
+	CASE WHEN lbg.last_hba1c < 8 THEN 'Yes' WHEN lbg.last_hba1c IS NULL AND lfbg.last_fbg < 150 THEN 'Yes' END AS diabetes_control,
 	lgfr.last_gfr,
 	lgfr.last_gfr_date,
-	lc.last_creatintine,
-	lc.last_creatintine_date,	
+	lc.last_creatinine,
+	lc.last_creatinine_date,	
 	lndx.asthma,
 	lndx.chronic_kidney_disease,
 	lndx.cardiovascular_disease,
 	lndx.copd,
 	lndx.diabetes_type1,
 	lndx.diabetes_type2,
+	CASE WHEN lndx.diabetes_type1 IS NOT NULL OR lndx.diabetes_type2 IS NOT NULL THEN 1 END AS diabetes_any,
 	lndx.hypertension,
 	lndx.hypothyroidism,
 	lndx.hyperthyroidism,		
