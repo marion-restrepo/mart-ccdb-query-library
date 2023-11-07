@@ -10,15 +10,16 @@ cohort AS (
 	LEFT JOIN (SELECT patient_id, date, encounter_id, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The NCD diagnosis CTE select the last reported NCD diagnosis per cohort enrollment. 
-last_ncd_diagnosis AS (
-    SELECT 
-		c.initial_encounter_id, nd.patient_id, nd.date, nd.diagnosis
-	FROM (SELECT d.ncdiagnosis AS diagnosis, n.date::date, d.patient_id, n.rn FROM ncdiagnosis d 
-	LEFT JOIN (SELECT encounter_id, date, ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY date DESC) AS rn FROM ncd) n 
-		USING(encounter_id)) nd
-	JOIN cohort c
-		ON nd.patient_id = c.patient_id AND c.initial_visit_date <= nd.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nd.date
-	WHERE nd.rn = 1),
+cohort_diagnosis AS (
+	SELECT
+		d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+	FROM ncdiagnosis d 
+	LEFT JOIN ncd n USING(encounter_id)
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date),
+last_cohort_diagnosis AS (
+	SELECT cd.patient_id, cd.initial_encounter_id, cd.date, cd.diagnosis
+	FROM cohort_diagnosis cd
+	INNER JOIN (SELECT initial_encounter_id, MAX(date) AS max_date FROM cohort_diagnosis GROUP BY initial_encounter_id) cd2 ON cd.initial_encounter_id = cd2.initial_encounter_id AND cd.date = cd2.max_date),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
 last_visit_location AS (	
 	SELECT 
@@ -70,10 +71,10 @@ SELECT
 	lvl.last_visit_location,
 	c.discharge_date,
 	c.patient_outcome,
-	lnd.diagnosis
-FROM last_ncd_diagnosis lnd
+	lcd.diagnosis
+FROM last_cohort_diagnosis lcd
 LEFT OUTER JOIN cohort c
-	ON lnd.initial_encounter_id = c.initial_encounter_id
+	ON lcd.initial_encounter_id = c.initial_encounter_id
 LEFT OUTER JOIN patient_identifier pi
 	ON c.patient_id = pi.patient_id
 LEFT OUTER JOIN person_attributes pa

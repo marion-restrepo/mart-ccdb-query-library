@@ -10,15 +10,16 @@ cohort AS (
 	LEFT JOIN (SELECT patient_id, date, encounter_id, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
-last_ncd_diagnosis AS (
-    SELECT 
-		c.initial_encounter_id, nd.patient_id, nd.date, nd.diagnosis
-	FROM (SELECT d.ncdiagnosis AS diagnosis, n.date::date, d.patient_id, n.rn FROM ncdiagnosis d 
-	LEFT JOIN (SELECT encounter_id, date, ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY date DESC) AS rn FROM ncd) n 
-		USING(encounter_id)) nd
-	JOIN cohort c
-		ON nd.patient_id = c.patient_id AND c.initial_visit_date <= nd.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nd.date
-	WHERE nd.rn = 1),
+cohort_diagnosis AS (
+	SELECT
+		d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+	FROM ncdiagnosis d 
+	LEFT JOIN ncd n USING(encounter_id)
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date),
+last_cohort_diagnosis AS (
+	SELECT cd.patient_id, cd.initial_encounter_id, cd.date, cd.diagnosis
+	FROM cohort_diagnosis cd
+	INNER JOIN (SELECT initial_encounter_id, MAX(date) AS max_date FROM cohort_diagnosis GROUP BY initial_encounter_id) cd2 ON cd.initial_encounter_id = cd2.initial_encounter_id AND cd.date = cd2.max_date),
 last_ncd_diagnosis_pivot AS (
 	SELECT 
 		DISTINCT ON (initial_encounter_id, patient_id, date) initial_encounter_id, 
@@ -37,7 +38,7 @@ last_ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
-	FROM last_ncd_diagnosis
+	FROM last_cohort_diagnosis
 	GROUP BY initial_encounter_id, patient_id, date),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
 ncd_risk_factors_pivot AS (
