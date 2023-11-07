@@ -394,7 +394,7 @@ SELECT
 	lc.last_creatinine,
 	lc.last_creatinine_date,	
 	lup.last_urine_protein,
-	lup.last_urine_protein,
+	lup.last_urine_protein_date,
 	lndx.asthma,
 	lndx.chronic_kidney_disease,
 	lndx.cardiovascular_disease,
