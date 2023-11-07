@@ -9,57 +9,36 @@ cohort AS (
 	FROM initial i
 	LEFT JOIN (SELECT patient_id, date, encounter_id, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
--- The diagnosis CTEs pivot diagnosis data horizontally from the NCD form. Only the last diagnoses are reported per cohort enrollment are present. 
-ncd_diagnosis_pivot AS (
-	SELECT 
-		DISTINCT ON (n.encounter_id, n.patient_id, n.date::date) n.encounter_id, 
-		n.patient_id, 
-		n.date::date,
-		MAX (CASE WHEN d.ncdiagnosis = 'Asthma' THEN 1 ELSE NULL END) AS asthma,
-		MAX (CASE WHEN d.ncdiagnosis = 'Chronic kidney disease' THEN 1 ELSE NULL END) AS chronic_kidney_disease,
-		MAX (CASE WHEN d.ncdiagnosis = 'Cardiovascular disease' THEN 1 ELSE NULL END) AS cardiovascular_disease,
-		MAX (CASE WHEN d.ncdiagnosis = 'Chronic obstructive pulmonary disease' THEN 1 ELSE NULL END) AS copd,
-		MAX (CASE WHEN d.ncdiagnosis = 'Diabetes mellitus, type 1' THEN 1 ELSE NULL END) AS diabetes_type1,
-		MAX (CASE WHEN d.ncdiagnosis = 'Diabetes mellitus, type 2' THEN 1 ELSE NULL END) AS diabetes_type2,
-		MAX (CASE WHEN d.ncdiagnosis = 'Hypertension' THEN 1 ELSE NULL END) AS hypertension,
-		MAX (CASE WHEN d.ncdiagnosis = 'Hypothyroidism' THEN 1 ELSE NULL END) AS hypothyroidism,
-		MAX (CASE WHEN d.ncdiagnosis = 'Hyperthyroidism' THEN 1 ELSE NULL END) AS hyperthyroidism,
-		MAX (CASE WHEN d.ncdiagnosis = 'Focal epilepsy' THEN 1 ELSE NULL END) AS focal_epilepsy,
-		MAX (CASE WHEN d.ncdiagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
-		MAX (CASE WHEN d.ncdiagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
-		MAX (CASE WHEN d.ncdiagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
-	FROM ncd n
-	LEFT OUTER JOIN ncdiagnosis d 
-		ON d.encounter_id = n.encounter_id AND d.ncdiagnosis IS NOT NULL 
-	WHERE d.ncdiagnosis IS NOT NULL 
-	GROUP BY n.encounter_id, n.patient_id, n.date::date),
+-- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
 last_ncd_diagnosis AS (
+    SELECT 
+		c.initial_encounter_id, nd.patient_id, nd.date, nd.diagnosis
+	FROM (SELECT d.ncdiagnosis AS diagnosis, n.date::date, d.patient_id, n.rn FROM ncdiagnosis d 
+	LEFT JOIN (SELECT encounter_id, date, ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY date DESC) AS rn FROM ncd) n 
+		USING(encounter_id)) nd
+	JOIN cohort c
+		ON nd.patient_id = c.patient_id AND c.initial_visit_date <= nd.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nd.date
+	WHERE nd.rn = 1),
+last_ncd_diagnosis_pivot AS (
 	SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
-		c.initial_encounter_id,
-		c.initial_visit_date, 
-		c.discharge_encounter_id,
-		c.discharge_date, 
-		ndp.date::date,
-		ndp.asthma,
-		ndp.chronic_kidney_disease,
-		ndp.cardiovascular_disease,
-		ndp.copd,
-		ndp.diabetes_type1,
-		ndp.diabetes_type2,
-		ndp.hypertension,
-		ndp.hypothyroidism,
-		ndp.hyperthyroidism,		
-		ndp.focal_epilepsy,
-		ndp.generalised_epilepsy,
-		ndp.unclassified_epilepsy,
-		ndp.other_ncd
-	FROM cohort c
-	LEFT OUTER JOIN ncd_diagnosis_pivot ndp 
-		ON c.patient_id = ndp.patient_id AND c.initial_visit_date <= ndp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ndp.date
-	WHERE ndp.date IS NOT NULL	
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_encounter_id, c.discharge_date, ndp.date, ndp.asthma, ndp.chronic_kidney_disease, ndp.cardiovascular_disease, ndp.copd, ndp.diabetes_type1, ndp.diabetes_type2, ndp.hypertension, ndp.hypothyroidism, ndp.hyperthyroidism, ndp.focal_epilepsy, ndp.generalised_epilepsy, ndp.unclassified_epilepsy, ndp.other_ncd 
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, ndp.date DESC),
+		DISTINCT ON (initial_encounter_id, patient_id, date) initial_encounter_id, 
+		patient_id, 
+		date,
+		MAX (CASE WHEN diagnosis = 'Asthma' THEN 1 ELSE NULL END) AS asthma,
+		MAX (CASE WHEN diagnosis = 'Chronic kidney disease' THEN 1 ELSE NULL END) AS chronic_kidney_disease,
+		MAX (CASE WHEN diagnosis = 'Cardiovascular disease' THEN 1 ELSE NULL END) AS cardiovascular_disease,
+		MAX (CASE WHEN diagnosis = 'Chronic obstructive pulmonary disease' THEN 1 ELSE NULL END) AS copd,
+		MAX (CASE WHEN diagnosis = 'Diabetes mellitus, type 1' THEN 1 ELSE NULL END) AS diabetes_type1,
+		MAX (CASE WHEN diagnosis = 'Diabetes mellitus, type 2' THEN 1 ELSE NULL END) AS diabetes_type2,
+		MAX (CASE WHEN diagnosis = 'Hypertension' THEN 1 ELSE NULL END) AS hypertension,
+		MAX (CASE WHEN diagnosis = 'Hypothyroidism' THEN 1 ELSE NULL END) AS hypothyroidism,
+		MAX (CASE WHEN diagnosis = 'Hyperthyroidism' THEN 1 ELSE NULL END) AS hyperthyroidism,
+		MAX (CASE WHEN diagnosis = 'Focal epilepsy' THEN 1 ELSE NULL END) AS focal_epilepsy,
+		MAX (CASE WHEN diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
+		MAX (CASE WHEN diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
+		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
+	FROM last_ncd_diagnosis
+	GROUP BY initial_encounter_id, patient_id, date),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
 ncd_risk_factors_pivot AS (
 	SELECT 
@@ -243,7 +222,7 @@ last_bp AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.systolic_blood_pressure IS NOT NULL AND vli.diastolic_blood_pressure IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
 -- The last BMI CTE extracts the last BMI measurement reported per cohort enrollment. Uses date reported on form. If no date is present, uses date of sample collection. If neither date or date of sample collection are present, results are not considered. 
 last_bmi AS (
 	SELECT 
@@ -258,7 +237,7 @@ last_bmi AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.bmi_kg_m2 IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
 -- The last fasting blood glucose CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_fbg AS (
 	SELECT 
@@ -273,7 +252,7 @@ last_fbg AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.fasting_blood_glucose_mg_dl IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last HbA1c CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_hba1c AS (
 	SELECT 
@@ -288,7 +267,7 @@ last_hba1c AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hba1c IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last GFR CTE extracts the last GFR measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_gfr AS (
 	SELECT 
@@ -303,7 +282,7 @@ last_gfr AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.gfr_ml_min_1_73m2 IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last creatinine CTE extracts the last creatinine measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_creatinine AS (
 	SELECT 
@@ -318,7 +297,22 @@ last_creatinine AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.creatinine_mg_dl IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, vli.date::date DESC)
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+-- The last urine protein CTE extracts the last urine protein result reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
+last_urine_protein AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+		c.initial_encounter_id,
+		c.initial_visit_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_urine_protein_date, 
+		vli.urine_protein AS last_urine_protein
+	FROM cohort c
+	LEFT OUTER JOIN vitals_and_laboratory_information vli
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.urine_protein IS NOT NULL
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -360,8 +354,8 @@ SELECT
 	pa."Living_conditions",
 	c.initial_visit_date AS enrollment_date,
 	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
-	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 6 THEN 'Yes' END AS in_cohort_6m,
-	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 12 THEN 'Yes' END AS in_cohort_12m,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 6 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_6m,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 12 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_12m,
 	c.readmission,
 	c.initial_visit_location,
 	lvl.last_visit_location,
@@ -383,7 +377,7 @@ SELECT
 	lbp.systolic_blood_pressure,
 	lbp.diastolic_blood_pressure,
 	CONCAT(lbp.systolic_blood_pressure,'/',lbp.diastolic_blood_pressure) AS blood_pressure,
-	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 40 THEN 'Yes' END AS blood_pressure_control,
+	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 90 THEN 'Yes' END AS blood_pressure_control,
 	lbp.last_bp_date,
 	lbmi.last_bmi,
 	lbmi.last_bmi_date,
@@ -398,6 +392,8 @@ SELECT
 	CASE WHEN lgfr.last_gfr < 30 THEN 'Yes' END AS gfr_control,
 	lc.last_creatinine,
 	lc.last_creatinine_date,	
+	lup.last_urine_protein,
+	lup.last_urine_protein,
 	lndx.asthma,
 	lndx.chronic_kidney_disease,
 	lndx.cardiovascular_disease,
@@ -435,7 +431,7 @@ LEFT OUTER JOIN person_details_default pdd
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.initial_encounter_id = ped.encounter_id
-LEFT OUTER JOIN last_ncd_diagnosis lndx
+LEFT OUTER JOIN last_ncd_diagnosis_pivot lndx
 	ON c.initial_encounter_id = lndx.initial_encounter_id
 LEFT OUTER JOIN last_risk_factors lrf
 	ON c.initial_encounter_id = lrf.initial_encounter_id
@@ -463,5 +459,7 @@ LEFT OUTER JOIN last_gfr lgfr
 	ON c.initial_encounter_id = lgfr.initial_encounter_id
 LEFT OUTER JOIN last_creatinine lc
 	ON c.initial_encounter_id = lc.initial_encounter_id
+LEFT OUTER JOIN last_urine_protein lup
+	ON c.initial_encounter_id = lup.initial_encounter_id
 LEFT OUTER JOIN last_visit_location lvl
 	ON c.initial_encounter_id = lvl.initial_encounter_id;
