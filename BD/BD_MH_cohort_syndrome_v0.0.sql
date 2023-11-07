@@ -27,11 +27,28 @@ first_clinician_initial_assessment AS (
 	WHERE (pmia.date::date >= c.intake_date) AND (pmia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date ASC),
+-- The Mental Health diagnosis CTEs takes only the last diagnoses reported per cohort enrollment from either the Psychiatrist mhGap initial or follow-up forms. 
+ia_syndrome AS (
+	SELECT 
+        pcia.patient_id, c.intake_encounter_id, pcia.date, pcia.main_syndrome, pcia.additional_syndrome, ROW_NUMBER() OVER (PARTITION BY pcia.patient_id ORDER BY pcia.date DESC, pcia.date_created DESC) AS rn
+    FROM psy_counselors_initial_assessment pcia
+	JOIN cohort c
+		ON pcia.patient_id = c.patient_id AND c.intake_date <= pcia.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= pcia.date
+    WHERE COALESCE(pcia.main_syndrome, pcia.additional_syndrome) IS NOT NULL),
+last_syndrome AS (
+	SELECT
+		patient_id, intake_encounter_id, date, main_syndrome AS syndrome
+	FROM ia_syndrome
+	WHERE main_syndrome IS NOT NULL AND rn = 1
+	UNION ALL
+	SELECT
+		patient_id, intake_encounter_id, date, additional_syndrome AS syndrome
+	FROM ia_syndrome
+	WHERE additional_syndrome IS NOT NULL AND rn = 1),
 -- The visit location CTE finds the last visit location reported across all clinical consultaiton/session forms.
 last_visit_location AS (	
 	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
-		vl.visit_location AS visit_location
+		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id, vl.visit_location AS visit_location
 	FROM cohort c
 	LEFT OUTER JOIN (
 		SELECT pcia.date::date, pcia.patient_id, pcia.visit_location FROM psy_counselors_initial_assessment pcia WHERE pcia.visit_location IS NOT NULL 
@@ -46,29 +63,7 @@ last_visit_location AS (
 		ON c.patient_id = vl.patient_id
 	WHERE vl.date >= c.intake_date AND (vl.date <= c.discharge_date OR c.discharge_date IS NULL)
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date, vl.visit_location
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC),
--- THe Stressor CTE creates a vertical list of all stressors.
-stressor_vertical AS (
-    SELECT 
-        encounter_id,
-        stressor_1 AS stressor
-    FROM mental_health_intake
-    UNION
-    SELECT
-        encounter_id,
-        stressor_2 AS stressor
-    FROM mental_health_intake
-    UNION
-    SELECT 
-        encounter_id,
-        stressor_3 AS stressor
-    FROM mental_health_intake),
-stressors AS (
-	SELECT
-		DISTINCT ON (encounter_id, stressor) encounter_id,
-		stressor
-	FROM stressor_vertical
-	where stressor IS NOT NULL)
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC)
 -- Main query --
 SELECT 
 	pi."Patient_Identifier",
@@ -106,24 +101,24 @@ SELECT
 		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND c.discharge_date IS NULL THEN 'Yes'
 		ELSE null
 	END AS in_cohort,
-	c.readmission,	
+	c.readmission,
 	mhi.visit_location AS entry_visit_location,
 	lvl.visit_location,
-	s.stressor
-FROM stressors s
+	ls.syndrome
+FROM last_syndrome ls
 LEFT OUTER JOIN cohort c
-    ON s.encounter_id = c.intake_encounter_id
+	ON ls.intake_encounter_id = c.intake_encounter_id
 LEFT OUTER JOIN first_psy_initial_assessment fpia 
-	ON c.intake_encounter_id = fpia.intake_encounter_id
+	ON ls.intake_encounter_id = fpia.intake_encounter_id
 LEFT OUTER JOIN first_clinician_initial_assessment fcia 
-	ON c.intake_encounter_id = fcia.intake_encounter_id
-LEFT OUTER JOIN patient_identifier pi
-	ON c.patient_id = pi.patient_id
+	ON ls.intake_encounter_id = fcia.intake_encounter_id
+LEFT OUTER JOIN patient_identifier pi 
+	ON ls.patient_id = pi.patient_id
 LEFT OUTER JOIN person_details_default pdd 
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.intake_encounter_id = ped.encounter_id
 LEFT OUTER JOIN mental_health_intake mhi
 	ON c.intake_encounter_id = mhi.encounter_id
-LEFT OUTER JOIN last_visit_location lvl
-	ON c.intake_encounter_id = lvl.intake_encounter_id;
+LEFT OUTER JOIN last_visit_location lvl 
+	ON ls.intake_encounter_id = lvl.intake_encounter_id;
