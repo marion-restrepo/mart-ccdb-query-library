@@ -151,7 +151,7 @@ SELECT
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
 		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
-	WHERE n.eye_exam_performed IS NOT NULL
+	WHERE n.eye_exam_performed = 'Yes'
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last foot exam CTE extracts the date of the last eye exam performed per cohort enrollment.
 last_foot_exam AS (
@@ -165,7 +165,7 @@ SELECT
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
 		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
-	WHERE n.foot_exam_performed IS NOT NULL
+	WHERE n.foot_exam_performed = 'Yes'
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The asthma severity CTE extracts the last asthma severity reported per cohort enrollment.
 asthma_severity AS (
@@ -377,7 +377,7 @@ SELECT
 	so.seizure_onset_age,
 	lbp.systolic_blood_pressure,
 	lbp.diastolic_blood_pressure,
-	CONCAT(lbp.systolic_blood_pressure,'/',lbp.diastolic_blood_pressure) AS blood_pressure,
+	CASE WHEN lbp.systolic_blood_pressure IS NOT NULL AND lbp.diastolic_blood_pressure IS NOT NULL THEN CONCAT(lbp.systolic_blood_pressure,'/',lbp.diastolic_blood_pressure) END AS blood_pressure,
 	CASE WHEN lbp.systolic_blood_pressure <= 140 AND lbp.diastolic_blood_pressure <= 90 THEN 'Yes' END AS blood_pressure_control,
 	lbp.last_bp_date,
 	lbmi.last_bmi,
