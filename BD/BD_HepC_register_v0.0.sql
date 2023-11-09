@@ -143,7 +143,10 @@ SELECT
 	ts.treatment_start_date AS treatment_start_date_fu,
 	ts.medication_duration AS treatment_duration_fu,
 	ts.hepatitis_c_treatment_choice AS treatment_fu,
-	ts.treatment_end_date AS treatment_end_date_fu
+	ts.treatment_end_date AS treatment_end_date_fu,
+	c.hcv_pcr_12_weeks_after_treatment_end, 
+	c.date_test_completed, 
+	c.result_return_date
 FROM cohort c
 LEFT OUTER JOIN patient_identifier pi
 	ON c.patient_id = pi.patient_id
