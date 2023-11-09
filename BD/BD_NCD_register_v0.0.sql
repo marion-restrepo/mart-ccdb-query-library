@@ -40,6 +40,10 @@ last_ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
 	FROM last_cohort_diagnosis
 	GROUP BY initial_encounter_id, patient_id, date),
+last_ncd_diagnosis_array AS (
+	SELECT initial_encounter_id, ARRAY_AGG(diagnosis) AS diagnosis_list
+	FROM last_cohort_diagnosis
+	GROUP BY initial_encounter_id, diagnosis),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
 ncd_risk_factors_pivot AS (
 	SELECT 
@@ -139,6 +143,14 @@ SELECT
 	LEFT OUTER JOIN ncd n
 		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),		
+-- The hospitalised CTE checks there is a hospitlisation reported in visits taking place in the last 6 months. 
+hospitalisation_last_6m AS (
+	SELECT DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,	c.initial_encounter_id, COUNT(n.hospitalised_since_last_visit) AS nb_hospitalised_last_6m, CASE WHEN n.hospitalised_since_last_visit IS NOT NULL THEN 'Yes' ELSE 'No' END AS hospitalised_last_6m
+		FROM cohort c
+		LEFT OUTER JOIN ncd n
+			ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		WHERE n.hospitalised_since_last_visit = 'Yes' and n.date <= current_date and n.date >= current_date - interval '6 months'
+		GROUP BY c.patient_id, c.initial_encounter_id, n.hospitalised_since_last_visit),
 -- The last eye exam CTE extracts the date of the last eye exam performed per cohort enrollment.
 last_eye_exam AS (
 SELECT 
@@ -371,6 +383,8 @@ SELECT
 	lnv.seizures_last_visit,
 	lnv.exacerbations_last_visit,
 	lnv.nb_exacerbations_last_visit,
+	h6m.nb_hospitalised_last_6m,
+	h6m.hospitalised_last_6m,
 	lee.last_eye_exam_date,
 	lfe.last_foot_exam_date,
 	asev.asthma_severity,
@@ -409,6 +423,7 @@ SELECT
 	lndx.generalised_epilepsy,
 	lndx.unclassified_epilepsy,
 	lndx.other_ncd,
+	lnda.diagnosis_list,
 	lrf.occupational_exposure,
 	lrf.traditional_medicine,
 	lrf.secondhand_smoking,
@@ -434,12 +449,16 @@ LEFT OUTER JOIN patient_encounter_details_default ped
 	ON c.initial_encounter_id = ped.encounter_id
 LEFT OUTER JOIN last_ncd_diagnosis_pivot lndx
 	ON c.initial_encounter_id = lndx.initial_encounter_id
+LEFT OUTER JOIN last_ncd_diagnosis_array lnda
+	ON c.initial_encounter_id = lnda.initial_encounter_id
 LEFT OUTER JOIN last_risk_factors lrf
 	ON c.initial_encounter_id = lrf.initial_encounter_id
 LEFT OUTER JOIN last_epilepsy_history leh
 	ON c.initial_encounter_id = leh.initial_encounter_id
 LEFT OUTER JOIN last_ncd_visit lnv
 	ON c.initial_encounter_id = lnv.initial_encounter_id
+LEFT OUTER JOIN hospitalisation_last_6m h6m
+	ON c.initial_encounter_id = h6m.initial_encounter_id
 LEFT OUTER JOIN last_eye_exam lee
 	ON c.initial_encounter_id = lee.initial_encounter_id
 LEFT OUTER JOIN last_foot_exam lfe
