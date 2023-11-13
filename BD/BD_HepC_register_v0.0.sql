@@ -30,7 +30,15 @@ SELECT
 	FROM cohort c
 	LEFT OUTER JOIN hepatitis_c hc
 		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
-	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),		
+	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),	
+-- The hospitalised CTE checks there is a hospitlisation reported in visits taking place in the last 6 months. 
+hospitalisation_last_6m AS (
+	SELECT DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,	c.initial_encounter_id, COUNT(hc.hospitalised_since_last_visit) AS nb_hospitalised_last_6m, CASE WHEN hc.hospitalised_since_last_visit IS NOT NULL THEN 'Yes' ELSE 'No' END AS hospitalised_last_6m
+		FROM cohort c
+		LEFT OUTER JOIN hepatitis_c hc
+			ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
+		WHERE hc.hospitalised_since_last_visit = 'Yes' and hc.date <= current_date and hc.date >= current_date - interval '6 months'
+		GROUP BY c.patient_id, c.initial_encounter_id, hc.hospitalised_since_last_visit),	
 -- The initial treatment CTE extracts treatment start data from the initial visit per cohort enrollment. If multiple initial visits have treatment initiation data, the most recent one is reported. 
 treatment_initial AS (
 SELECT 
@@ -136,6 +144,8 @@ SELECT
 	lhv.ascites_last_visit,
 	lhv.haematememesis_last_visit,
 	lhv.cirrhosis_last_visit,
+	h6m.nb_hospitalised_last_6m,
+	h6m.hospitalised_last_6m,
 	ti.treatment_start_date AS treatment_start_date_initial,
 	ti.medication_duration AS treatment_duration_initial,
 	ti.hepatitis_c_treatment_choice AS treatment_initial,
@@ -158,6 +168,8 @@ LEFT OUTER JOIN patient_encounter_details_default ped
 	ON c.initial_encounter_id = ped.encounter_id
 LEFT OUTER JOIN last_hepc_visit lhv	
 	ON c.initial_encounter_id = lhv.initial_encounter_id
+LEFT OUTER JOIN hospitalisation_last_6m h6m
+	ON c.initial_encounter_id = h6m.initial_encounter_id
 LEFT OUTER JOIN treatment_initial ti
 	ON c.initial_encounter_id = ti.initial_encounter_id
 LEFT OUTER JOIN treatment_secondary ts
