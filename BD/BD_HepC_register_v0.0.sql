@@ -155,6 +155,13 @@ SELECT
 	ts.hepatitis_c_treatment_choice AS treatment_fu,
 	CASE WHEN ts.treatment_end_date IS NOT NULL THEN ts.treatment_end_date WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '12 weeks' THEN (ts.treatment_start_date + INTERVAL '12 weeks')::date WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '24 weeks' THEN (ts.treatment_start_date + INTERVAL '24 weeks')::date END AS treatment_end_date_fu,
 	CASE WHEN ti.treatment_end_date > CURRENT_DATE THEN 'Yes' WHEN ti.treatment_end_date IS NULL AND ti.medication_duration = '12 weeks' AND (ti.treatment_start_date + INTERVAL '12 weeks') > CURRENT_DATE THEN 'Yes' WHEN ti.treatment_end_date IS NULL AND ti.medication_duration = '24 weeks' AND (ti.treatment_start_date + INTERVAL '24 weeks') > CURRENT_DATE THEN 'Yes' WHEN ts.treatment_end_date > CURRENT_DATE THEN 'Yes' WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '12 weeks' AND (ts.treatment_start_date + INTERVAL '12 weeks') > CURRENT_DATE THEN 'Yes' WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '24 weeks' AND (ts.treatment_start_date + INTERVAL '24 weeks') > CURRENT_DATE THEN 'Yes' END AS currently_on_treatment,
+	CASE WHEN ti.treatment_end_date < CURRENT_DATE AND ts.treatment_end_date IS NULL THEN 'Yes' 
+	WHEN ti.treatment_end_date IS NULL AND ts.treatment_end_date IS NULL AND ti.medication_duration = '12 weeks' AND (ti.treatment_start_date + INTERVAL '12 weeks') < CURRENT_DATE THEN 'Yes' 
+	WHEN ti.treatment_end_date IS NULL AND ts.treatment_end_date IS NULL AND ti.medication_duration = '24 weeks' AND (ti.treatment_start_date + INTERVAL '24 weeks') < CURRENT_DATE THEN 'Yes' 
+	WHEN ts.treatment_end_date < CURRENT_DATE THEN 'Yes' 
+	WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '12 weeks' AND (ts.treatment_start_date + INTERVAL '12 weeks') < CURRENT_DATE THEN 'Yes' 
+	WHEN ts.treatment_end_date IS NULL AND ts.medication_duration = '24 weeks' AND (ts.treatment_start_date + INTERVAL '24 weeks') < CURRENT_DATE THEN 'Yes' 
+	END AS completed_treatment,
 	c.hcv_pcr_12_weeks_after_treatment_end, 
 	c.date_test_completed, 
 	c.result_return_date
