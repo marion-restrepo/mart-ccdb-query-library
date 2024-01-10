@@ -65,7 +65,8 @@ SELECT
 		WHEN pdd.age::int >= 4 AND pdd.age::int <= 7 THEN '04-07'
 		WHEN pdd.age::int >= 8 AND pdd.age::int <= 14 THEN '08-14'
 		WHEN pdd.age::int >= 15 AND pdd.age::int <= 17 THEN '15-17'
-		WHEN pdd.age::int >= 18 THEN '18+'
+		WHEN pdd.age::int >= 18 AND pdd.age::int <= 59 THEN '18-59'
+		WHEN pdd.age::int >= 60 THEN '60+'
 		ELSE NULL
 	END AS age_group_current,
 	pdd.gender,
