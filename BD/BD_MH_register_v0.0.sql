@@ -228,7 +228,7 @@ psychotropic_prescription AS (
 	FROM cohort c
 	LEFT OUTER JOIN medication_data_default mdd
 		ON c.patient_id = mdd.patient_id
-	WHERE mdd.start_date >= c.intake_date AND (mdd.start_date <= c.discharge_date OR c.discharge_date IS NULL) AND mdd.coded_drug_name IN ('AMITRIPTYLINE hydrochloride, 25 mg, tab.','BIPERIDEN hydrochloride, 2 mg, tab','CARBAMAZEPINE, 100 mg, tab.','CARBAMAZEPINE, 200 mg, tab.','CARBIMAZOLE, 20 mg, tab.','CHLORPROMAZINE hydrochloride, eq. 100mg base, tab.','CHLORPROMAZINE hydrochloride, eq. 25mg base, tab.','DIAZEPAM, 5 mg, tab.','DIAZEPAM, 5 mg/ml, 2 ml, amp.','FLUOXETINE hydrochloride, eq. 20 mg base, caps.','FLUPHENAZINE decanoate, 25mg/ml, 1ml, amp.','HALOPERIDOL 0.5mg, tab.','HALOPERIDOL decanoate, 50mg/ml, 1ml, amp.','HALOPERIDOL, 2 mg/ml, oral sol., 100 ml, bot. with pipette','HALOPERIDOL, 5 mg, tab.','HALOPERIDOL, 5 mg/ml, 1 ml, amp.','HYDROXYZINE dihydrochloride, 25 mg, tab.','OLANZAPINE, 10 mg, tab.','OLANZAPINE, 2.5 mg, tab.','OLANZAPINE, 5mg, tab.','PAROXETINE, 20 mg, breakable tab.','PHENOBARBITAL, 30 mg, tab.','PHENOBARBITAL, 50 mg, tab.','PHENOBARBITAL, 60 mg, tab.','PHENYTOIN sodium, 100 mg, tab.','PHENYTOIN, 30 mg/5ml, oral susp., 500ml, bot.','PROMETHAZINE hydrochloride, eq. 25 mg base, tab.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 1 ml, amp.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 2 ml, amp.','PROTHIONAMIDE, 250 mg, tab., blister','RISPERIDONE, 1 mg, tab.','RISPERIDONE, 2 mg, tab.','SERTRALINE hydrochloride, eq. 100mg base, tab.','SERTRALINE hydrochloride, eq. 50mg base, tab.','TRIHEXYPHENIDYL hydrochloride, 2 mg, tab.','VALPROATE SODIUM, 200 mg, gastro-resistant tab.','VALPROATE SODIUM, 200mg/5ml, 300 ml, bot.','VALPROATE SODIUM, 500 mg, gastro-resistant tab.')),
+	WHERE mdd.start_date >= c.intake_date AND (mdd.start_date <= c.discharge_date OR c.discharge_date IS NULL) AND mdd.coded_drug_name IN ('AMITRIPTYLINE hydrochloride, 25 mg, tab.','BIPERIDEN hydrochloride, 2 mg, tab','CARBAMAZEPINE, 100 mg, tab.','CARBAMAZEPINE, 200 mg, tab.','CHLORPROMAZINE hydrochloride, eq. 100mg base, tab.','CHLORPROMAZINE hydrochloride, eq. 25mg base, tab.','DIAZEPAM, 5 mg, tab.','DIAZEPAM, 5 mg/ml, 2 ml, amp.','FLUOXETINE hydrochloride, eq. 20 mg base, caps.','FLUPHENAZINE decanoate, 25mg/ml, 1ml, amp.','HALOPERIDOL 0.5mg, tab.','HALOPERIDOL decanoate, 50mg/ml, 1ml, amp.','HALOPERIDOL, 2 mg/ml, oral sol., 100 ml, bot. with pipette','HALOPERIDOL, 5 mg, tab.','HALOPERIDOL, 5 mg/ml, 1 ml, amp.','HYDROXYZINE dihydrochloride, 25 mg, tab.','OLANZAPINE, 10 mg, tab.','OLANZAPINE, 2.5 mg, tab.','OLANZAPINE, 5mg, tab.','PAROXETINE, 20 mg, breakable tab.','PHENOBARBITAL, 30 mg, tab.','PHENOBARBITAL, 50 mg, tab.','PHENOBARBITAL, 60 mg, tab.','PHENYTOIN sodium, 100 mg, tab.','PHENYTOIN, 30 mg/5ml, oral susp., 500ml, bot.','PROMETHAZINE hydrochloride, eq. 25 mg base, tab.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 1 ml, amp.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 2 ml, amp.','RISPERIDONE, 1 mg, tab.','RISPERIDONE, 2 mg, tab.','SERTRALINE hydrochloride, eq. 100mg base, tab.','SERTRALINE hydrochloride, eq. 50mg base, tab.','TRIHEXYPHENIDYL hydrochloride, 2 mg, tab.','VALPROATE SODIUM, 200 mg, gastro-resistant tab.','VALPROATE SODIUM, 200mg/5ml, 300 ml, bot.','VALPROATE SODIUM, 500 mg, gastro-resistant tab.')),
 -- The visit location CTE finds the last visit location reported across all clinical consultaiton/session forms.
 last_visit_location AS (	
 	SELECT 
@@ -262,7 +262,8 @@ SELECT
 		WHEN pdd.age::int >= 4 AND pdd.age::int <= 7 THEN '04-07'
 		WHEN pdd.age::int >= 8 AND pdd.age::int <= 14 THEN '08-14'
 		WHEN pdd.age::int >= 15 AND pdd.age::int <= 17 THEN '15-17'
-		WHEN pdd.age::int >= 18 THEN '18+'
+		WHEN pdd.age::int >= 18 AND pdd.age::int <= 59 THEN '18-59'
+		WHEN pdd.age::int >= 60 THEN '60+'
 		ELSE NULL
 	END AS age_group_current,
 	EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) AS age_admission,
@@ -271,7 +272,8 @@ SELECT
 		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 4 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 7 THEN '04-07'
 		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 8 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 14 THEN '08-14'
 		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 15 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 17 THEN '15-17'
-		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 18 THEN '18+'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 18 AND EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy')))) <= 59 THEN '18-59'
+		WHEN EXTRACT(YEAR FROM (SELECT age(ped.encounter_datetime, TO_DATE(CONCAT('01-01-', pdd.birthyear), 'dd-MM-yyyy'))))::int >= 60 THEN '60+'
 		ELSE NULL
 	END AS age_group_admission,
 	pdd.gender,
