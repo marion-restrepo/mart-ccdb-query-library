@@ -17,8 +17,8 @@ last_ncd_visit AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		n.date::date AS last_visit_form_date,
-		n.visit_type AS last_visit_form_type,
+		n.date::date AS last_form_date,
+		n.visit_type AS last_form_type,
 		CASE WHEN n.currently_pregnant = 'Yes' THEN 'Yes' END AS pregnant_last_visit,
 		CASE WHEN n.family_planning_counseling = 'Yes' THEN 'Yes' END AS fp_last_visit,
 		CASE WHEN n.hospitalised_since_last_visit = 'Yes' THEN 'Yes' END AS hospitalised_last_visit,
@@ -59,9 +59,11 @@ last_appointments AS (
 	SELECT
 		lca.patient_id,
 		c.initial_encounter_id,
-		CASE WHEN lca.appointment_start_time >= lnv.last_visit_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lnv.last_visit_form_date THEN lnv.last_visit_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_visit_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lnv.last_visit_form_date IS NOT NULL THEN lnv.last_visit_form_date::date ELSE NULL END AS last_appointment_date,
-		CASE WHEN lca.appointment_start_time >= lnv.last_visit_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lnv.last_visit_form_date THEN lnv.last_visit_form_type WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_visit_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lnv.last_visit_form_date IS NOT NULL THEN lnv.last_visit_form_type ELSE NULL END AS last_appointment_service,
-		CASE WHEN lca.appointment_start_time >= lnv.last_visit_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lnv.last_visit_form_date THEN (DATE_PART('day',(now())-(lnv.last_visit_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_visit_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lnv.last_visit_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lnv.last_visit_form_date::timestamp)))::int ELSE NULL END AS days_since_last_completed_appointment,
+		lca.appointment_start_time::date AS last_appointment_date,
+		lca.appointment_service AS last_appointment_service,
+		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_date::date ELSE NULL END AS last_visit_date,
+		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_type WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_type ELSE NULL END AS last_visit_type,
+		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lnv.last_form_date THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int ELSE NULL END AS days_since_last_visit,
 		fma.appointment_start_time::date AS last_missed_appointment_date,
 		fma.appointment_service AS last_missed_appointment_service,
 		CASE WHEN fma.appointment_start_time IS NOT NULL THEN (DATE_PART('day',(now())-(fma.appointment_start_time::timestamp)))::int ELSE NULL END AS days_since_last_missed_appointment
@@ -71,7 +73,7 @@ last_appointments AS (
 	LEFT OUTER JOIN first_missed_appointment fma
 		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= fma.appointment_start_time
 	LEFT OUTER JOIN last_ncd_visit lnv
-		ON c.patient_id = lnv.patient_id AND c.initial_visit_date <= lnv.last_visit_form_date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lnv.last_visit_form_date),
+		ON c.patient_id = lnv.patient_id AND c.initial_visit_date <= lnv.last_form_date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lnv.last_form_date),		
 -- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
 cohort_diagnosis AS (
 	SELECT
@@ -411,20 +413,23 @@ SELECT
 	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
 	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 6 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_6m,
 	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 12 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_12m,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment < 90 THEN 'Yes' WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment >= 90 AND (la.days_since_last_missed_appointment IS NULL OR la.days_since_last_missed_appointment < 90) THEN 'Yes' ELSE NULL END AS active_patient,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_completed_appointment THEN 'Yes' ELSE NULL END AS inactive_patient,
 	c.readmission,
 	c.initial_visit_location,
+	lnl.last_visit_location,
+	lnv.last_form_date,
+	lnv.last_form_type,	
 	la.last_appointment_date,
 	la.last_appointment_service,
-	la.days_since_last_completed_appointment,
+	la.last_visit_date,
+	la.last_visit_type,
+	la.days_since_last_visit,
 	la.last_missed_appointment_date,
 	la.last_missed_appointment_service,
 	la.days_since_last_missed_appointment,
-	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment < 90 THEN 'Yes' WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment >= 90 AND (la.days_since_last_missed_appointment IS NULL OR la.days_since_last_missed_appointment < 90) THEN 'Yes' ELSE NULL END AS active_patient,
-	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_completed_appointment THEN 'Yes' ELSE NULL END AS inactive_patient,
 	c.discharge_date,
 	c.patient_outcome,
-	lnv.last_visit_form_date,
-	lnv.last_visit_form_type,
 	lnv.pregnant_last_visit,
 	lnv.fp_last_visit,
 	lnv.hospitalised_last_visit,
