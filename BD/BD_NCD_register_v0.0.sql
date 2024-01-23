@@ -11,7 +11,7 @@ cohort AS (
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The last NCD visit CTE extracts the last NCD visit data per cohort enrollment to look at if there are values reported for pregnancy, family planning, hospitalization, missed medication, seizures, or asthma/COPD exacerbations repoted at the last visit. 
 last_ncd_visit AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
@@ -195,7 +195,7 @@ hospitalisation_last_6m AS (
 		GROUP BY c.patient_id, c.initial_encounter_id, n.hospitalised_since_last_visit),
 -- The last eye exam CTE extracts the date of the last eye exam performed per cohort enrollment.
 last_eye_exam AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
@@ -209,7 +209,7 @@ SELECT
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last foot exam CTE extracts the date of the last eye exam performed per cohort enrollment.
 last_foot_exam AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
@@ -223,7 +223,7 @@ SELECT
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The asthma severity CTE extracts the last asthma severity reported per cohort enrollment.
 asthma_severity AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
@@ -238,7 +238,7 @@ SELECT
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The seizure onset CTE extracts the last age of seizure onset reported per cohort enrollment.
 seizure_onset AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
@@ -419,13 +419,8 @@ SELECT
 	la.last_missed_appointment_date,
 	la.last_missed_appointment_service,
 	la.days_since_last_missed_appointment,
-	CASE 
-		WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment < 90 THEN 'Yes' 
-		WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment >= 90 AND (la.days_since_last_missed_appointment IS NULL OR la.days_since_last_missed_appointment < 90) THEN 'Yes' 
-		ELSE NULL END AS active_patient,
-	CASE 
-		WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_completed_appointment THEN 'Yes' 
-		ELSE NULL END AS inactive_patient,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment < 90 THEN 'Yes' WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_completed_appointment >= 90 AND (la.days_since_last_missed_appointment IS NULL OR la.days_since_last_missed_appointment < 90) THEN 'Yes' ELSE NULL END AS active_patient,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_completed_appointment THEN 'Yes' ELSE NULL END AS inactive_patient,
 	c.discharge_date,
 	c.patient_outcome,
 	lnv.last_visit_form_date,
