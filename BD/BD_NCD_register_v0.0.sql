@@ -9,27 +9,6 @@ cohort AS (
 	FROM initial i
 	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
--- The last NCD visit CTE extracts the last NCD visit data per cohort enrollment to look at if there are values reported for pregnancy, family planning, hospitalization, missed medication, seizures, or asthma/COPD exacerbations repoted at the last visit. 
-last_ncd_visit AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
-		c.initial_encounter_id,
-		c.initial_visit_date, 
-		c.discharge_encounter_id,
-		c.discharge_date, 
-		n.date::date AS last_form_date,
-		n.visit_type AS last_form_type,
-		CASE WHEN n.currently_pregnant = 'Yes' THEN 'Yes' END AS pregnant_last_visit,
-		CASE WHEN n.family_planning_counseling = 'Yes' THEN 'Yes' END AS fp_last_visit,
-		CASE WHEN n.hospitalised_since_last_visit = 'Yes' THEN 'Yes' END AS hospitalised_last_visit,
-		CASE WHEN n.missed_medication_doses_in_last_7_days = 'Yes' THEN 'Yes' END AS missed_medication_last_visit,
-		CASE WHEN n.seizures_since_last_visit = 'Yes' THEN 'Yes' END AS seizures_last_visit,
-		CASE WHEN n.exacerbation_per_week IS NOT NULL AND n.exacerbation_per_week > 0 THEN 'Yes' END AS exacerbations_last_visit,
-		n.exacerbation_per_week AS nb_exacerbations_last_visit
-	FROM cohort c
-	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
-	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last completed and missed appointment CTEs determine if a patient currently enrolled in the cohort has not attended their appointments.  
 last_completed_appointment AS (
 	SELECT
@@ -53,9 +32,18 @@ first_missed_appointment AS (
 	FROM last_completed_appointment lca
 	RIGHT JOIN patient_appointment_default pa
 		ON lca.patient_id = pa.patient_id 
-		WHERE pa.appointment_start_time > lca.appointment_start_time 
-			AND (pa.appointment_status = 'Missed' OR pa.appointment_status = 'Scheduled')
+		WHERE pa.appointment_start_time > lca.appointment_start_time AND pa.appointment_status = 'Missed'
 		ORDER BY pa.patient_id, pa.appointment_start_time ASC),
+last_form AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
+		nvsl.date AS last_form_date,
+		last_form_type AS last_form_type
+	FROM cohort c
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
 last_appointments AS (
 	SELECT
 		lca.patient_id,
@@ -63,9 +51,11 @@ last_appointments AS (
 		lca.appointment_start_time::date AS last_appointment_date,
 		lca.appointment_service AS last_appointment_service,
 		lca.appointment_location AS last_appointment_location,
-		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_date::date ELSE NULL END AS last_visit_date,
-		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_type WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_type ELSE NULL END AS last_visit_type,
-		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lnv.last_form_date THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int ELSE NULL END AS days_since_last_visit,
+		lf.last_form_date,
+		lf.last_form_type,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lf.last_form_date THEN lf.last_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN lf.last_form_date::date ELSE NULL END AS last_visit_date,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lf.last_form_date THEN lf.last_form_type WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN lf.last_form_type ELSE NULL END AS last_visit_type,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lf.last_form_date THEN (DATE_PART('day',(now())-(lf.last_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lf.last_form_date::timestamp)))::int ELSE NULL END AS days_since_last_visit,
 		fma.appointment_start_time::date AS last_missed_appointment_date,
 		fma.appointment_service AS last_missed_appointment_service,
 		CASE WHEN fma.appointment_start_time IS NOT NULL THEN (DATE_PART('day',(now())-(fma.appointment_start_time::timestamp)))::int ELSE NULL END AS days_since_last_missed_appointment
@@ -74,8 +64,8 @@ last_appointments AS (
 		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time
 	LEFT OUTER JOIN first_missed_appointment fma
 		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= fma.appointment_start_time
-	LEFT OUTER JOIN last_ncd_visit lnv
-		ON c.patient_id = lnv.patient_id AND c.initial_visit_date <= lnv.last_form_date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lnv.last_form_date),		
+	LEFT OUTER JOIN last_form lf
+		ON c.initial_encounter_id = lf.initial_encounter_id),		
 -- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
 cohort_diagnosis AS (
 	SELECT
@@ -255,18 +245,38 @@ seizure_onset AS (
 		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
 	WHERE n.age_at_onset_of_seizure_in_years IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
+-- The last NCD visit CTE extracts the last NCD visit data per cohort enrollment to look at if there are values reported for pregnancy, family planning, hospitalization, missed medication, seizures, or asthma/COPD exacerbations repoted at the last visit. 
+last_ncd_form AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+		c.initial_encounter_id,
+		c.initial_visit_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		n.date::date AS last_form_date,
+		n.visit_type AS last_form_type,
+		CASE WHEN n.currently_pregnant = 'Yes' THEN 'Yes' END AS pregnant_last_visit,
+		CASE WHEN n.family_planning_counseling = 'Yes' THEN 'Yes' END AS fp_last_visit,
+		CASE WHEN n.hospitalised_since_last_visit = 'Yes' THEN 'Yes' END AS hospitalised_last_visit,
+		CASE WHEN n.missed_medication_doses_in_last_7_days = 'Yes' THEN 'Yes' END AS missed_medication_last_visit,
+		CASE WHEN n.seizures_since_last_visit = 'Yes' THEN 'Yes' END AS seizures_last_visit,
+		CASE WHEN n.exacerbation_per_week IS NOT NULL AND n.exacerbation_per_week > 0 THEN 'Yes' END AS exacerbations_last_visit,
+		n.exacerbation_per_week AS nb_exacerbations_last_visit
+	FROM cohort c
+	LEFT OUTER JOIN ncd n
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
 last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		ncd.visit_location AS last_form_location,
-		ncd.date AS last_form_date
+		nvsl.date AS last_form_date
 	FROM cohort c
-	LEFT OUTER JOIN ncd
-		ON c.patient_id = ncd.patient_id AND c.initial_visit_date <= ncd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ncd.date::date
+	LEFT OUTER JOIN (SELECT patient_id, date FROM NCD UNION SELECT patient_id, date FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
 	WHERE ncd.visit_location IS NOT NULL
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, ncd.date, ncd.visit_location
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, ncd.date DESC),
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC)
 -- The last BP CTE extracts the last complete blood pressure measurements reported per cohort enrollment. Uses date reported on form. If no date is present, uses date of sample collection. If neither date or date of sample collection are present, results are not considered. 
 last_bp AS (
 	SELECT 
@@ -423,8 +433,8 @@ SELECT
 	lfl.last_form_location,
 	la.last_appointment_location,
 	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date < la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
-	lnv.last_form_date,
-	lnv.last_form_type,	
+	lnf.last_form_date,
+	lnf.last_form_type,	
 	la.last_appointment_date,
 	la.last_appointment_service,
 	la.last_visit_date,
@@ -435,13 +445,13 @@ SELECT
 	la.days_since_last_missed_appointment,
 	c.discharge_date,
 	c.patient_outcome,
-	lnv.pregnant_last_visit,
-	lnv.fp_last_visit,
-	lnv.hospitalised_last_visit,
-	lnv.missed_medication_last_visit,
-	lnv.seizures_last_visit,
-	lnv.exacerbations_last_visit,
-	lnv.nb_exacerbations_last_visit,
+	lnf.pregnant_last_visit,
+	lnf.fp_last_visit,
+	lnf.hospitalised_last_visit,
+	lnf.missed_medication_last_visit,
+	lnf.seizures_last_visit,
+	lnf.exacerbations_last_visit,
+	lnf.nb_exacerbations_last_visit,
 	h6m.nb_hospitalised_last_6m,
 	h6m.hospitalised_last_6m,
 	lee.last_eye_exam_date,
@@ -516,8 +526,8 @@ LEFT OUTER JOIN last_risk_factors lrf
 	ON c.initial_encounter_id = lrf.initial_encounter_id
 LEFT OUTER JOIN last_epilepsy_history leh
 	ON c.initial_encounter_id = leh.initial_encounter_id
-LEFT OUTER JOIN last_ncd_visit lnv
-	ON c.initial_encounter_id = lnv.initial_encounter_id
+LEFT OUTER JOIN last_ncd_form lnf
+	ON c.initial_encounter_id = lnf.initial_encounter_id
 LEFT OUTER JOIN hospitalisation_last_6m h6m
 	ON c.initial_encounter_id = h6m.initial_encounter_id
 LEFT OUTER JOIN last_eye_exam lee
