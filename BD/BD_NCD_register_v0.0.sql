@@ -5,9 +5,9 @@ WITH initial AS (
 	FROM ncd WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, d.date AS discharge_date, d.ncd_hep_b_patient_outcome AS patient_outcome
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.ncd_hep_b_patient_outcome AS patient_outcome
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
+	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The last NCD visit CTE extracts the last NCD visit data per cohort enrollment to look at if there are values reported for pregnancy, family planning, hospitalization, missed medication, seizures, or asthma/COPD exacerbations repoted at the last visit. 
 last_ncd_visit AS (
@@ -37,6 +37,7 @@ last_completed_appointment AS (
 		appointment_start_time,
 		appointment_status,
 		appointment_service,
+		appointment_location,
 		DATE_PART('day',(now())-(appointment_start_time::timestamp))::int AS days_since
 	FROM patient_appointment_default
 	WHERE appointment_start_time < now()
@@ -61,6 +62,7 @@ last_appointments AS (
 		c.initial_encounter_id,
 		lca.appointment_start_time::date AS last_appointment_date,
 		lca.appointment_service AS last_appointment_service,
+		lca.appointment_location AS last_appointment_location,
 		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_date::date ELSE NULL END AS last_visit_date,
 		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lnv.last_form_date THEN lnv.last_form_type WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN lnv.last_form_type ELSE NULL END AS last_visit_type,
 		CASE WHEN lca.appointment_start_time >= lnv.last_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lnv.last_form_date THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lnv.last_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lnv.last_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lnv.last_form_date::timestamp)))::int ELSE NULL END AS days_since_last_visit,
@@ -105,8 +107,8 @@ last_ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
 	FROM last_cohort_diagnosis
 	GROUP BY initial_encounter_id, patient_id, date),
-last_ncd_diagnosis_array AS (
-	SELECT initial_encounter_id, ARRAY_AGG(diagnosis) AS diagnosis_list
+last_ncd_diagnosis_list AS (
+	SELECT initial_encounter_id, STRING_AGG(diagnosis, ', ') AS diagnosis_list
 	FROM last_cohort_diagnosis
 	GROUP BY initial_encounter_id),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
@@ -254,10 +256,11 @@ seizure_onset AS (
 	WHERE n.age_at_onset_of_seizure_in_years IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
-last_visit_location AS (	
+last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		ncd.visit_location AS last_visit_location
+		ncd.visit_location AS last_form_location,
+		ncd.date AS last_form_date
 	FROM cohort c
 	LEFT OUTER JOIN ncd
 		ON c.patient_id = ncd.patient_id AND c.initial_visit_date <= ncd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ncd.date::date
@@ -417,7 +420,9 @@ SELECT
 	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_visit THEN 'Yes' ELSE NULL END AS inactive_patient,
 	c.readmission,
 	c.initial_visit_location,
-	lvl.last_visit_location,
+	lfl.last_form_location,
+	la.last_appointment_location,
+	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date < la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
 	lnv.last_form_date,
 	lnv.last_form_type,	
 	la.last_appointment_date,
@@ -477,7 +482,7 @@ SELECT
 	lndx.generalised_epilepsy,
 	lndx.unclassified_epilepsy,
 	lndx.other_ncd,
-	lnda.diagnosis_list,
+	lndl.diagnosis_list,
 	lrf.occupational_exposure,
 	lrf.traditional_medicine,
 	lrf.secondhand_smoking,
@@ -505,8 +510,8 @@ LEFT OUTER JOIN last_appointments la
 	ON c.initial_encounter_id = la.initial_encounter_id
 LEFT OUTER JOIN last_ncd_diagnosis_pivot lndx
 	ON c.initial_encounter_id = lndx.initial_encounter_id
-LEFT OUTER JOIN last_ncd_diagnosis_array lnda
-	ON c.initial_encounter_id = lnda.initial_encounter_id
+LEFT OUTER JOIN last_ncd_diagnosis_list lndl
+	ON c.initial_encounter_id = lndl.initial_encounter_id
 LEFT OUTER JOIN last_risk_factors lrf
 	ON c.initial_encounter_id = lrf.initial_encounter_id
 LEFT OUTER JOIN last_epilepsy_history leh
@@ -537,5 +542,5 @@ LEFT OUTER JOIN last_creatinine lc
 	ON c.initial_encounter_id = lc.initial_encounter_id
 LEFT OUTER JOIN last_urine_protein lup
 	ON c.initial_encounter_id = lup.initial_encounter_id
-LEFT OUTER JOIN last_visit_location lvl
-	ON c.initial_encounter_id = lvl.initial_encounter_id;
+LEFT OUTER JOIN last_form_location lfl
+	ON c.initial_encounter_id = lfl.initial_encounter_id;
