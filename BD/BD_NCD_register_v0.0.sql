@@ -40,7 +40,8 @@ last_form AS (
 		nvsl.date AS last_form_date,
 		last_form_type AS last_form_type
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
+	LEFT OUTER JOIN (SELECT patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date 
+	ELSE date END AS date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
 		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
@@ -270,13 +271,14 @@ last_ncd_form AS (
 last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		nvsl.date AS last_form_date
+		nvsl.date AS last_form_date,
+		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, date FROM NCD UNION SELECT patient_id, date FROM vitals_and_laboratory_information) nvsl
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
 		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
-	WHERE ncd.visit_location IS NOT NULL
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC)
+	WHERE nvsl.visit_location IS NOT NULL
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
 -- The last BP CTE extracts the last complete blood pressure measurements reported per cohort enrollment. Uses date reported on form. If no date is present, uses date of sample collection. If neither date or date of sample collection are present, results are not considered. 
 last_bp AS (
 	SELECT 
@@ -432,7 +434,7 @@ SELECT
 	c.initial_visit_location,
 	lfl.last_form_location,
 	la.last_appointment_location,
-	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date < la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
+	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
 	la.last_form_date,
 	la.last_form_type,	
 	la.last_appointment_date,
