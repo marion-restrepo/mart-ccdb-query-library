@@ -5,9 +5,9 @@ WITH initial AS (
 	FROM ncd WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, d.date AS discharge_date, d.ncd_hep_b_patient_outcome AS patient_outcome
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.ncd_hep_b_patient_outcome AS patient_outcome
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
+	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The NCD diagnosis CTE select the last reported NCD diagnosis per cohort enrollment. 
 cohort_diagnosis AS (
@@ -21,16 +21,34 @@ last_cohort_diagnosis AS (
 	FROM cohort_diagnosis cd
 	INNER JOIN (SELECT initial_encounter_id, MAX(date) AS max_date FROM cohort_diagnosis GROUP BY initial_encounter_id) cd2 ON cd.initial_encounter_id = cd2.initial_encounter_id AND cd.date = cd2.max_date),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
-last_visit_location AS (	
+last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		ncd.visit_location AS last_visit_location
+		nvsl.date AS last_form_date,
+		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN ncd
-		ON c.patient_id = ncd.patient_id AND c.initial_visit_date <= ncd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ncd.date::date
-	WHERE ncd.visit_location IS NOT NULL
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, ncd.date, ncd.visit_location
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, ncd.date DESC)
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	WHERE nvsl.visit_location IS NOT NULL
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
+last_completed_appointment AS (
+	SELECT
+		DISTINCT ON (patient_id) patient_id,
+		appointment_start_time,
+		appointment_location
+	FROM patient_appointment_default
+	WHERE appointment_start_time < now() AND appointment_location IS NOT NULL AND (appointment_status = 'Completed' OR appointment_status = 'CheckedIn')
+	ORDER BY patient_id, appointment_start_time DESC),
+last_visit_location AS (	
+	SELECT 
+		c.initial_encounter_id,
+		CASE WHEN lfl.last_form_date > lca.appointment_start_time THEN lfl.last_form_location WHEN lfl.last_form_date <= lca.appointment_start_time THEN lca.appointment_location WHEN lfl.last_form_date IS NOT NULL AND lca.appointment_start_time IS NULL THEN lfl.last_form_location WHEN lfl.last_form_date IS NULL AND lca.appointment_start_time IS NOT NULL THEN lca.appointment_location ELSE NULL END AS last_visit_location
+	FROM cohort c
+	LEFT OUTER JOIN last_form_location lfl
+		ON c.initial_encounter_id = lfl.initial_encounter_id 
+	LEFT OUTER JOIN last_completed_appointment lca
+		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time::date)
 -- Main query --
 SELECT 
 	pi."Patient_Identifier",
