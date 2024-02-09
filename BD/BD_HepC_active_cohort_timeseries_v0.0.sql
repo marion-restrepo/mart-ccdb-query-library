@@ -1,13 +1,13 @@
 -- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on NCD forms with visit types of 'initial visit' and 'discharge visit'. The query takes all initial visit dates and matches discharge visit dates if the discharge visit date falls between the initial visit date and the next initial visit date (if present).
 WITH initial AS (
 	SELECT 
-		patient_id, encounter_id AS initial_encounter_id, date AS initial_visit_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS initial_visit_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_initial_visit_date
+		patient_id, encounter_id AS initial_encounter_id, visit_location AS initial_visit_location, date AS initial_visit_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS initial_visit_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_initial_visit_date
 	FROM hepatitis_c WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_date, d.date AS discharge_date
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome, d.hcv_pcr_12_weeks_after_treatment_end, d.date_test_completed, d.result_return_date
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date FROM hepatitis_c WHERE visit_type = 'Discharge visit') d 
+	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome, hcv_pcr_12_weeks_after_treatment_end, date_test_completed, result_return_date FROM hepatitis_c WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The following CTEs create the active patient calculation by counting each day the cumulative admissions and exits from the cohort.
 range_values AS (

@@ -5,10 +5,68 @@ WITH initial AS (
 	FROM hepatitis_c WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, d.date AS discharge_date, d.patient_outcome, d.hcv_pcr_12_weeks_after_treatment_end, d.date_test_completed, d.result_return_date
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome, d.hcv_pcr_12_weeks_after_treatment_end, d.date_test_completed, d.result_return_date
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, patient_outcome, hcv_pcr_12_weeks_after_treatment_end, date_test_completed, result_return_date FROM hepatitis_c WHERE visit_type = 'Discharge visit') d 
+	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome, hcv_pcr_12_weeks_after_treatment_end, date_test_completed, result_return_date FROM hepatitis_c WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
+-- The last completed and missed appointment CTEs determine if a patient currently enrolled in the cohort has not attended their appointments.  
+last_completed_appointment AS (
+	SELECT
+		DISTINCT ON (patient_id) patient_id,
+		appointment_start_time,
+		appointment_status,
+		appointment_service,
+		appointment_location,
+		DATE_PART('day',(now())-(appointment_start_time::timestamp))::int AS days_since
+	FROM patient_appointment_default
+	WHERE appointment_start_time < now()
+		AND (appointment_status = 'Completed' OR appointment_status = 'CheckedIn')
+	ORDER BY patient_id, appointment_start_time DESC),
+first_missed_appointment AS (
+	SELECT
+		DISTINCT ON (pa.patient_id) pa.patient_id,
+		pa.appointment_start_time,
+		pa.appointment_status,
+		pa.appointment_service,
+		DATE_PART('day',(now())-(pa.appointment_start_time::timestamp))::int AS days_since
+	FROM last_completed_appointment lca
+	RIGHT JOIN patient_appointment_default pa
+		ON lca.patient_id = pa.patient_id 
+		WHERE pa.appointment_start_time > lca.appointment_start_time AND pa.appointment_status = 'Missed'
+		ORDER BY pa.patient_id, pa.appointment_start_time ASC),
+last_form AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
+		nvsl.date AS last_form_date,
+		last_form_type AS last_form_type
+	FROM cohort c
+	LEFT OUTER JOIN (SELECT patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date 
+	ELSE date END AS date, visit_type AS last_form_type FROM hepatitis_c UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
+last_appointments AS (
+	SELECT
+		lca.patient_id,
+		c.initial_encounter_id,
+		lca.appointment_start_time::date AS last_appointment_date,
+		lca.appointment_service AS last_appointment_service,
+		lca.appointment_location AS last_appointment_location,
+		lf.last_form_date,
+		lf.last_form_type,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN lca.appointment_start_time::date WHEN lca.appointment_start_time < lf.last_form_date THEN lf.last_form_date::date WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN lca.appointment_start_time::date WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN lf.last_form_date::date ELSE NULL END AS last_visit_date,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN lca.appointment_service WHEN lca.appointment_start_time < lf.last_form_date THEN lf.last_form_type WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN lca.appointment_service WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN lf.last_form_type ELSE NULL END AS last_visit_type,
+		CASE WHEN lca.appointment_start_time >= lf.last_form_date THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int WHEN lca.appointment_start_time < lf.last_form_date THEN (DATE_PART('day',(now())-(lf.last_form_date::timestamp)))::int WHEN lca.appointment_start_time IS NOT NULL AND lf.last_form_date IS NULL THEN (DATE_PART('day',(now())-(lca.appointment_start_time::timestamp)))::int  WHEN lca.appointment_start_time IS NULL AND lf.last_form_date IS NOT NULL THEN (DATE_PART('day',(now())-(lf.last_form_date::timestamp)))::int ELSE NULL END AS days_since_last_visit,
+		fma.appointment_start_time::date AS last_missed_appointment_date,
+		fma.appointment_service AS last_missed_appointment_service,
+		CASE WHEN fma.appointment_start_time IS NOT NULL THEN (DATE_PART('day',(now())-(fma.appointment_start_time::timestamp)))::int ELSE NULL END AS days_since_last_missed_appointment
+	FROM cohort c
+	LEFT OUTER JOIN last_completed_appointment lca 
+		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time
+	LEFT OUTER JOIN first_missed_appointment fma
+		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= fma.appointment_start_time
+	LEFT OUTER JOIN last_form lf
+		ON c.initial_encounter_id = lf.initial_encounter_id),		
 -- The last Hepatitis C visit CTE extracts the last visit data per cohort enrollment to look at if there are values reported for illicit drug use, pregnancy, hospitalisation, jaundice, hepatic encephalopathy, ascites, haematemesis, or cirrhosis repoted at the last visit. 
 last_hepc_visit AS (
 SELECT 
@@ -77,17 +135,18 @@ SELECT
 		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
 	WHERE hc.treatment_start_date IS NOT NULL AND hc.visit_type = 'Follow up visit'
 	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),
--- The last visit location CTE finds the last visit location reported in hepatitis C forms.
-last_visit_location AS (	
+-- The last visit location CTE finds the last visit location reported in Hepatitis C forms.
+last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		hc.visit_location AS last_visit_location
+		nvsl.date AS last_form_date,
+		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN hepatitis_c hc
-		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
-	WHERE hc.visit_location IS NOT NULL
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, hc.date, hc.visit_location
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, hc.date DESC)
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM hepatitis_c UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	WHERE nvsl.visit_location IS NOT NULL
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -131,7 +190,19 @@ SELECT
 	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
 	c.readmission,
 	c.initial_visit_location,
-	lvl.last_visit_location,
+	lfl.last_form_location,
+	la.last_appointment_location,
+	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
+	la.last_form_date,
+	la.last_form_type,	
+	la.last_appointment_date,
+	la.last_appointment_service,
+	la.last_visit_date,
+	la.last_visit_type,
+	la.days_since_last_visit,
+	la.last_missed_appointment_date,
+	la.last_missed_appointment_service,
+	la.days_since_last_missed_appointment,
 	c.discharge_date,
 	c.patient_outcome,
 	lhv.last_visit_date,
@@ -175,6 +246,8 @@ LEFT OUTER JOIN person_details_default pdd
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.initial_encounter_id = ped.encounter_id
+LEFT OUTER JOIN last_appointments la
+	ON c.initial_encounter_id = la.initial_encounter_id
 LEFT OUTER JOIN last_hepc_visit lhv	
 	ON c.initial_encounter_id = lhv.initial_encounter_id
 LEFT OUTER JOIN hospitalisation_last_6m h6m
@@ -183,5 +256,5 @@ LEFT OUTER JOIN treatment_initial ti
 	ON c.initial_encounter_id = ti.initial_encounter_id
 LEFT OUTER JOIN treatment_secondary ts
 	ON c.initial_encounter_id = ts.initial_encounter_id
-LEFT OUTER JOIN last_visit_location lvl
-	ON c.initial_encounter_id = lvl.initial_encounter_id;
+LEFT OUTER JOIN last_form_location lfl
+	ON c.initial_encounter_id = lfl.initial_encounter_id;
