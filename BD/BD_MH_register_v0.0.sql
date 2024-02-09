@@ -32,6 +32,8 @@ syndrome_pivot AS (
 	SELECT 
 		DISTINCT ON (pcia.patient_id, pcia.date) pcia.patient_id, 
 		pcia.date::date,
+		MAX (CASE WHEN pcia.main_syndrome IS NOT NULL THEN pcia.main_syndrome ELSE NULL END) AS main_syndrome,	
+		MAX (CASE WHEN pcia.additional_syndrome IS NOT NULL THEN pcia.additional_syndrome ELSE NULL END) AS additional_syndrome,
 		MAX (CASE WHEN pcia.main_syndrome = 'Depression' OR pcia.additional_syndrome = 'Depression'  THEN 1 ELSE NULL END) AS depression,	
 		MAX (CASE WHEN pcia.main_syndrome = 'Anxiety disorder' OR pcia.additional_syndrome = 'Anxiety disorder'  THEN 1 ELSE NULL END) AS anxiety_disorder,
 		MAX (CASE WHEN pcia.main_syndrome = 'Trauma related symptoms' OR pcia.additional_syndrome = 'Trauma related symptoms'  THEN 1 ELSE NULL END) AS trauma_related_symptoms,	
@@ -52,6 +54,8 @@ last_syndrome AS (
 		c.discharge_encounter_id,
 		c.discharge_date, 
 		sp.date,
+		sp.main_syndrome,
+		sp.additional_syndrome,
 		sp.depression,	
 		sp.anxiety_disorder,
 		sp.trauma_related_symptoms,	
@@ -65,24 +69,18 @@ last_syndrome AS (
 	FROM cohort c
 	LEFT OUTER JOIN syndrome_pivot sp
 		ON c.patient_id = sp.patient_id AND c.intake_date <= sp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= sp.date
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, sp.date, sp.depression, sp.anxiety_disorder, sp.trauma_related_symptoms, sp.adult_behavioral_substance_problem, sp.child_behavioral_problem, sp.psychosis, sp.psychosomatic_problems, sp.neurocognitive_problem, sp.epilepsy, sp.other_syndrome
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, sp.date, sp.main_syndrome, sp.additional_syndrome,sp.depression, sp.anxiety_disorder, sp.trauma_related_symptoms, sp.adult_behavioral_substance_problem, sp.child_behavioral_problem, sp.psychosis, sp.psychosomatic_problems, sp.neurocognitive_problem, sp.epilepsy, sp.other_syndrome
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, sp.date DESC),
--- The initial CGI-Severity score CTE reports only one initial CGI-Severity score per cohort enrollment. If the score has been reported in mhGAP initial assessment form, then the most recent record is reported. If not reported in the mhGAP initial assessment form, then the most recent record from the counselor initial assessment form is reported. 
+-- The initial CGI-Severity score CTE reports only one initial CGI-Severity score per cohort enrollment. The score from the first initial assessment is reported.
 initial_cgis AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
-		CASE 
-			WHEN pmia.cgi_s_score IS NOT NULL THEN pmia.cgi_s_score
-			WHEN pmia.cgi_s_score IS NULL AND pcia.clinical_global_impression_severity_score_coded IS NOT NULL THEN pcia.clinical_global_impression_severity_score_coded
-			ELSE NULL 
-		END AS cgi_s_score_at_initial_assessment	
+		cgis_initial AS cgi_s_score_at_initial_assessment	
 	FROM cohort c
-	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
-		ON c.patient_id = pmia.patient_id
-	LEFT OUTER JOIN psy_counselors_initial_assessment pcia
-		ON c.patient_id = pcia.patient_id
-	WHERE (pmia.date::date >= c.intake_date AND (pmia.date::date <= c.discharge_date OR c.discharge_date IS NULL)) OR (pcia.date::date >= c.intake_date AND (pcia.date::date <= c.discharge_date OR c.discharge_date IS NULL))
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date::date DESC, pcia.date::date DESC),
+	LEFT OUTER JOIN (SELECT date, patient_id, cgi_s_score AS cgis_initial FROM psychiatrist_mhgap_initial_assessment UNION SELECT date, patient_id, clinical_global_impression_severity_score_coded AS cgis_initial FROM psy_counselors_initial_assessment) ia
+		ON c.patient_id = ia.patient_id
+	WHERE ia.date::date >= c.intake_date AND (ia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, ia.date::date ASC),
 -- The Mental Health diagnosis CTE pivots mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported per cohort enrollment are present. 
 last_mh_main_dx AS (
 	SELECT 
@@ -236,19 +234,34 @@ last_visit_location AS (
 		vl.visit_location AS visit_location
 	FROM cohort c
 	LEFT OUTER JOIN (
-		SELECT pcia.date::date, pcia.patient_id, pcia.visit_location FROM psy_counselors_initial_assessment pcia WHERE pcia.visit_location IS NOT NULL 
-		UNION 
-		SELECT pmia.date::date, pmia.patient_id, pmia.visit_location FROM psychiatrist_mhgap_initial_assessment pmia WHERE pmia.visit_location IS NOT NULL 
-		UNION
-		SELECT pcfu.date::date, pcfu.patient_id, pcfu.visit_location FROM psy_counselors_follow_up pcfu WHERE pcfu.visit_location IS NOT NULL 
-		UNION
-		SELECT pmfu.date::date, pmfu.patient_id, pmfu.visit_location FROM psychiatrist_mhgap_follow_up pmfu WHERE pmfu.visit_location IS NOT NULL
-		UNION
-		SELECT mhd.discharge_date AS date, mhd.patient_id, mhd.visit_location FROM mental_health_discharge mhd WHERE mhd.visit_location IS NOT NULL) vl
+		SELECT date::date, patient_id, visit_location FROM mental_health_intake WHERE visit_location IS NOT NULL
+		UNION SELECT date::date, patient_id, visit_location FROM psy_counselors_initial_assessment WHERE visit_location IS NOT NULL 
+		UNION SELECT date::date, patient_id, visit_location FROM psychiatrist_mhgap_initial_assessment WHERE visit_location IS NOT NULL 
+		UNION SELECT date::date, patient_id, visit_location FROM psy_counselors_follow_up WHERE visit_location IS NOT NULL 
+		UNION SELECT date::date, patient_id, visit_location FROM psychiatrist_mhgap_follow_up WHERE visit_location IS NOT NULL
+		UNION SELECT discharge_date AS date, patient_id, visit_location FROM mental_health_discharge WHERE visit_location IS NOT NULL) vl
 		ON c.patient_id = vl.patient_id
 	WHERE vl.date >= c.intake_date AND (vl.date <= c.discharge_date OR c.discharge_date IS NULL)
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date, vl.visit_location
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC)
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC),
+-- The visit date CTE finds the last visit reported across all clinical consultaiton/session forms.
+last_visit_date AS (	
+	SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
+		vd.date AS last_visit_date,
+		vd.form_field_path AS last_visit
+	FROM cohort c
+	LEFT OUTER JOIN (
+		SELECT date::date, patient_id, form_field_path FROM mental_health_intake
+		UNION SELECT date::date, patient_id, form_field_path FROM psy_counselors_initial_assessment 
+		UNION SELECT date::date, patient_id, form_field_path FROM psychiatrist_mhgap_initial_assessment  
+		UNION SELECT date::date, patient_id, form_field_path FROM psy_counselors_follow_up 
+		UNION SELECT date::date, patient_id, form_field_path FROM psychiatrist_mhgap_follow_up 
+		UNION SELECT discharge_date AS date, patient_id, form_field_path FROM mental_health_discharge) vd
+		ON c.patient_id = vd.patient_id
+	WHERE vd.date >= c.intake_date AND (vd.date <= c.discharge_date OR c.discharge_date IS NULL)
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vd.date, vd.form_field_path
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vd.date DESC)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -298,6 +311,13 @@ SELECT
 		ELSE null
 	END AS in_cohort,
 	c.readmission,
+	CASE 
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NULL AND fpia.date = c.discharge_date THEN 'Yes'
+		WHEN fcia.date IS NOT NULL AND fpia.date IS NULL AND fcia.date = c.discharge_date THEN 'Yes'
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date <= fpia.date::date AND fcia.date = c.discharge_date THEN 'Yes'
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date > fpia.date::date AND fpia.date = c.discharge_date THEN 'Yes'
+		ELSE NULL
+	END	AS same_day_discharge,
 	mhi.visit_location AS entry_visit_location,
 	CASE 
 		WHEN lvl.visit_location IS NOT NULL THEN lvl.visit_location
@@ -308,6 +328,8 @@ SELECT
 		WHEN mhi.visit_location != lvl.visit_location THEN 'Yes'
 		ELSE NULL
 	END AS clinic_change,
+	lvd.last_visit_date,
+	lvd.last_visit,
 	mhi.source_of_initial_patient_referral,
 	CASE WHEN mhi.stressor_1 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_2 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_3 = 'Non-conflict-related medical condition' THEN 1 ELSE NULL END AS "stressor: non-conflict-related medical condition",
 	CASE WHEN mhi.stressor_1 = 'Conflict-related medical condition' THEN 1 WHEN mhi.stressor_2 = 'Conflict-related medical condition' THEN 1 WHEN mhi.stressor_3 = 'Conflict-related medical condition' THEN 1 ELSE NULL END AS "stressor: conflict-related medical condition",
@@ -328,6 +350,8 @@ SELECT
 	CASE WHEN mhi.stressor_1 = 'None' THEN 1 WHEN mhi.stressor_2 = 'None' THEN 1 WHEN mhi.stressor_3 = 'None' THEN 1 ELSE NULL END AS "stressor: none",
 	CASE WHEN mhi.stressor_1 IS NOT NULL AND mhi.stressor_1 != 'None' THEN 1 ELSE 0 END + CASE WHEN mhi.stressor_2 IS NOT NULL AND mhi.stressor_2 != 'None' THEN 1 ELSE 0 END + CASE WHEN mhi.stressor_3 IS NOT NULL AND mhi.stressor_3 != 'None' THEN 1 ELSE 0 END AS stressor_count,
 	mhi.risk_factor_present,
+	ls.main_syndrome,
+	ls.additional_syndrome,
 	ls.depression AS "syndrome: depression",	
 	ls.anxiety_disorder AS "syndrome: anxiety disorder",
 	ls.trauma_related_symptoms AS "syndrome: trauma related symptoms",	
@@ -424,4 +448,6 @@ LEFT OUTER JOIN psy_fu_other pfuo
 LEFT OUTER JOIN psychotropic_prescription pp
 	ON c.intake_encounter_id = pp.intake_encounter_id
 LEFT OUTER JOIN last_visit_location lvl
-	ON c.intake_encounter_id = lvl.intake_encounter_id;
+	ON c.intake_encounter_id = lvl.intake_encounter_id
+LEFT OUTER JOIN last_visit_date lvd
+	ON c.intake_encounter_id = lvd.intake_encounter_id;
