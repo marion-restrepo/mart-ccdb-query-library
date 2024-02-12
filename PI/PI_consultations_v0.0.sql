@@ -1,17 +1,14 @@
--- The first 3 sub-tables of the query build the frame for monitoring patient entry to and exit from the waiting list and cohort. The table is built by listing all intake dates as recorded in the MH intake form. For each exit date is matched to an intake following the logic that is occurs after the entry date but not before the next entry date, in the case that a patient enters the cohort more than once.
-WITH intake_cte_2 AS (
-	SELECT patient_id, encounter_id AS entry_encounter_id, date::date AS intake_date, CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry_id_2, 1 AS one
+-- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on the MH intake form and the MH discharge form. The query takes all intake dates and matches discharge dates if the discharge date falls between the intake date and the next intake date (if present).
+WITH intake AS (
+	SELECT 
+		patient_id, encounter_id AS intake_encounter_id, date::date AS intake_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS intake_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_intake_date
 	FROM mental_health_intake),
-intake_cte_1 AS (
-	SELECT patient_id, entry_encounter_id, intake_date, entry_id_2::int+one AS entry_id_1
-	FROM intake_cte_2),
-entry_exit_cte AS (
-	SELECT ic1.patient_id, ic1.entry_encounter_id, ic1.intake_date, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
-	FROM intake_cte_1 ic1
-	LEFT OUTER JOIN intake_cte_2 ic2
-		ON ic1.entry_id_1::int = ic2.entry_id_2::int
-	LEFT OUTER JOIN (SELECT patient_id, discharge_date, encounter_id FROM mental_health_discharge) mhd
-		ON ic1.patient_id = mhd.patient_id AND mhd.discharge_date >= ic1.intake_date AND (mhd.discharge_date < ic2.intake_date OR ic2.intake_date IS NULL)),
+cohort AS (
+	SELECT
+		i.patient_id, i.intake_encounter_id, i.intake_date, CASE WHEN i.intake_order > 1 THEN 'Yes' END readmission, mhd.encounter_id AS discharge_enctounter_id, mhd.discharge_date::date
+	FROM intake i
+	LEFT JOIN mental_health_discharge mhd 
+		ON i.patient_id = mhd.patient_id AND mhd.discharge_date >= i.intake_date AND (mhd.discharge_date < i.next_intake_date OR i.next_intake_date IS NULL)),
 -- The Consulations sub-table creates a master table of all consultations/sessions as reported by the clinical forms.
 consultations_cte AS (
 	SELECT
@@ -21,7 +18,7 @@ consultations_cte AS (
 		pcia.intervention_setting,
 		'Individual session' AS type_of_activity,
 		'Initial' AS visit_type,
-		'Counselor' AS provider_type,
+		'Psychologist' AS provider_type,
 		pcia.encounter_id
 	FROM psy_counselors_initial_assessment pcia 
 	UNION
@@ -32,7 +29,7 @@ consultations_cte AS (
 		pmia.intervention_setting,
 		'Individual session' AS type_of_activity,
 		'Initial' AS visit_type,
-		'Psychiatrist' AS provider_type,
+		'mhGAP doctor' AS provider_type,
 		pmia.encounter_id
 	FROM psychiatrist_mhgap_initial_assessment pmia
 	UNION
@@ -43,7 +40,7 @@ consultations_cte AS (
 		pcfu.intervention_setting,
 		pcfu.type_of_activity,
 		'Follow up' AS visit_type,
-		'Counselor' AS provider_type,
+		'Psychologist' AS provider_type,
 		pcfu.encounter_id
 	FROM psy_counselors_follow_up pcfu 
 	UNION
@@ -54,7 +51,7 @@ consultations_cte AS (
 		pmfu.intervention_setting,
 		pmfu.type_of_activity,
 		'Follow up' AS visit_type,
-		'Psychiatrist' AS provider_type,
+		'mhGAP doctor' AS provider_type,
 		pmfu.encounter_id
 	FROM psychiatrist_mhgap_follow_up pmfu)
 -- Main query --
