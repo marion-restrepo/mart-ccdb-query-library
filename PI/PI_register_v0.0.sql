@@ -1,18 +1,15 @@
--- The first 3 sub-tables of the query build the frame for monitoring patient entry to and exit from the waiting list and cohort. The table is built by listing all intake dates as recorded in the MH intake form. For each exit date is matched to an intake following the logic that is occurs after the entry date but not before the next entry date, in the case that a patient enters the cohort more than once.
-WITH intake_cte_2 AS (
-	SELECT patient_id, encounter_id AS entry_encounter_id, date::date AS intake_date, CONCAT(patient_id, ROW_NUMBER () OVER (PARTITION BY patient_id ORDER BY date)) AS entry_id_2, 1 AS one
+-- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on the MH intake form and the MH discharge form. The query takes all intake dates and matches discharge dates if the discharge date falls between the intake date and the next intake date (if present).
+WITH intake AS (
+	SELECT 
+		patient_id, encounter_id AS intake_encounter_id, date::date AS intake_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS intake_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_intake_date
 	FROM mental_health_intake),
-intake_cte_1 AS (
-	SELECT patient_id, entry_encounter_id, intake_date, entry_id_2::int+one AS entry_id_1
-	FROM intake_cte_2),
-entry_exit_cte AS (
-	SELECT ic1.patient_id, ic1.entry_encounter_id, ic1.intake_date, CASE WHEN ic2.intake_date IS NOT NULL THEN 1 ELSE NULL END AS readmission, mhd.discharge_date::date, mhd.encounter_id AS discharge_encounter_id
-	FROM intake_cte_1 ic1
-	LEFT OUTER JOIN intake_cte_2 ic2
-		ON ic1.entry_id_1::int = ic2.entry_id_2::int
-	LEFT OUTER JOIN (SELECT patient_id, discharge_date, encounter_id FROM mental_health_discharge) mhd
-		ON ic1.patient_id = mhd.patient_id AND mhd.discharge_date >= ic1.intake_date AND (mhd.discharge_date < ic2.intake_date OR ic2.intake_date IS NULL)),
--- The first psy initial assessment table extracts the date from the psy initial assessment as the cohort entry date. If multiple initial assessments are completed then the first is used.
+cohort AS (
+	SELECT
+		i.patient_id, i.intake_encounter_id, i.intake_date, CASE WHEN i.intake_order > 1 THEN 'Yes' END readmission, mhd.encounter_id AS discharge_enctounter_id, mhd.discharge_date::date
+	FROM intake i
+	LEFT JOIN mental_health_discharge mhd 
+		ON i.patient_id = mhd.patient_id AND mhd.discharge_date >= i.intake_date AND (mhd.discharge_date < i.next_intake_date OR i.next_intake_date IS NULL)),
+-- The first psy initial assessment CTE extracts the date from the psy initial assessment as the cohort entry date. If multiple initial assessments are completed then the first is used.
 first_psy_initial_assessment AS (
 	SELECT DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date) eec.entry_encounter_id, pcia.date::date
 	FROM entry_exit_cte eec
@@ -24,8 +21,7 @@ first_psy_initial_assessment AS (
 -- The first clinician initial assessment table extracts the date from the first clinician initial assesment. If multiple clinician initial assessments are completed then the first is used. This table is used in case there is no psy initial assessment date provided. 
 first_clinician_initial_assessment AS (
 SELECT 
-		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date) eec.entry_encounter_id,
-		pmia.date::date
+		DISTINCT ON (eec.patient_id, eec.entry_encounter_id, eec.intake_date, eec.discharge_date) eec.entry_encounter_id, pmia.date::date
 	FROM entry_exit_cte eec
 	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
 		ON eec.patient_id = pmia.patient_id
@@ -290,8 +286,10 @@ SELECT
 	pa."Living_conditions",
 	eec.intake_date, 
 	CASE 
-		WHEN fpia.date IS NOT NULL THEN fpia.date
-		WHEN fpia.date IS NULL THEN fcia.date
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NULL THEN fpia.date
+		WHEN fcia.date IS NOT NULL AND fpia.date IS NULL THEN fcia.date
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date <= fpia.date::date THEN fcia.date
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date > fpia.date::date THEN fpia.date
 		ELSE NULL
 	END	AS enrollment_date,
 	eec.discharge_date,
