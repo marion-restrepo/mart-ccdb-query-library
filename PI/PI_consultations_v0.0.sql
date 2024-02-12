@@ -5,7 +5,7 @@ WITH intake AS (
 	FROM mental_health_intake),
 cohort AS (
 	SELECT
-		i.patient_id, i.intake_encounter_id, i.intake_date, CASE WHEN i.intake_order > 1 THEN 'Yes' END readmission, mhd.encounter_id AS discharge_enctounter_id, mhd.discharge_date::date
+		i.patient_id, i.intake_encounter_id, i.intake_date, CASE WHEN i.intake_order > 1 THEN 'Yes' END readmission, mhd.encounter_id AS discharge_encounter_id, mhd.discharge_date::date
 	FROM intake i
 	LEFT JOIN mental_health_discharge mhd 
 		ON i.patient_id = mhd.patient_id AND mhd.discharge_date >= i.intake_date AND (mhd.discharge_date < i.next_intake_date OR i.next_intake_date IS NULL)),
@@ -58,7 +58,7 @@ consultations_cte AS (
 SELECT 
 	DISTINCT ON (cc.patient_id, cc.date::date, cc.visit_location, cc.intervention_setting, cc.type_of_activity, cc.visit_type, cc.provider_type) cc.patient_id,
 	pi."Patient_Identifier",
-	eec.entry_encounter_id,
+	c.intake_encounter_id,
 	pdd.age AS age_current,
 	CASE 
 		WHEN pdd.age::int <= 3 THEN '0-3'
@@ -80,11 +80,11 @@ SELECT
 	cc.provider_type,
 	cc.encounter_id
 FROM consultations_cte cc
-LEFT OUTER JOIN entry_exit_cte eec
-	ON cc.patient_id = eec.patient_id AND cc.date >= eec.intake_date AND (cc.date <= eec.discharge_date OR eec.discharge_date is NULL)
+LEFT OUTER JOIN cohort c
+	ON cc.patient_id = c.patient_id AND cc.date >= c.intake_date AND (cc.date <= c.discharge_date OR c.discharge_date is NULL)
 LEFT OUTER JOIN patient_identifier pi
 	ON cc.patient_id = pi.patient_id
 LEFT OUTER JOIN person_details_default pdd 
 	ON cc.patient_id = pdd.person_id
 LEFT OUTER JOIN person_address_default pad
-	ON eec.patient_id = pad.person_id;
+	ON c.patient_id = pad.person_id;
