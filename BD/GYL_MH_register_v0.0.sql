@@ -82,6 +82,7 @@ initial_cgis AS (
 	WHERE ia.date::date >= c.intake_date AND (ia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, ia.date::date ASC),
 -- The Mental Health diagnosis CTE pivots mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported per cohort enrollment are present. 
+-- -- Question for Anne: how is diagnosis made for MH vs Epilepsy patients (when does each happen and how will it be entered?). Thinking that I might need to separate out MH and Epilepsy diagnosis.
 last_mh_main_dx AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
@@ -158,6 +159,40 @@ last_mh_diagnosis AS (
 	UNION
 	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
 	GROUP BY mhdu.patient_id, intake_encounter_id),	
+-- The mhGAP form CTE extracts the last visit with an mhGAP provider per cohort enrollment to look at if there are values reported for pregnancy, hospitalization, missed medication, or seizures since the last visit. 
+first_mhgap_form AS (
+SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		pmia.date::date AS first_mhgap_date,
+		pmia.age_at_onset_of_seizure_in_years
+	FROM cohort c
+	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia
+		ON c.patient_id = pmia.patient_id AND c.intake_date <= pmia.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= pmia.date::date
+	ORDER BY c.patient_id, c.intake_encounter_id, pmia.patient_id, pmia.date::date ASC),	
+-- The mhGAP form CTE extracts the last visit with an mhGAP provider per cohort enrollment to look at if there are values reported for pregnancy, hospitalization, missed medication, or seizures since the last visit. 
+last_mhgap_form AS (
+SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		mhgap.date::date AS last_mhgap_date,
+		mhgap.currently_pregnant AS pregnant_last_visit,
+		mhgap.hospitalised_since_last_visit AS hospitalised_last_visit,
+		mhgap.missed_medication_doses_in_last_7_days AS missed_medication_last_visit,
+		mhgap.seizure_since_last_visit AS seizures_last_visit
+	FROM cohort c
+	LEFT OUTER JOIN (
+			SELECT patient_id, date::date, currently_pregnant, hospitalised_since_last_visit, missed_medication_doses_in_last_7_days, seizure_since_last_visit FROM psychiatrist_mhgap_initial_assessment
+			UNION
+			SELECT patient_id, date::date, currently_pregnant, hospitalised_since_last_visit, missed_medication_doses_in_last_7_days, seizure_since_last_visit FROM psychiatrist_mhgap_follow_up) mhgap
+		ON c.patient_id = mhgap.patient_id AND c.intake_date <= mhgap.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mhgap.date::date
+	ORDER BY c.patient_id, c.intake_encounter_id, mhgap.patient_id, mhgap.date::date DESC),	
 -- The counselor initial assessment CTE counts the number of initial counselor assessments that took place per cohort enrollment. 
 counselor_ia AS (
 	SELECT 
@@ -219,6 +254,7 @@ psy_fu_other AS (
 	WHERE pmfu.date::date >= c.intake_date AND (pmfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND (pmfu.type_of_activity != 'Individual session' OR pmfu.type_of_activity != 'Missed appointment')
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
 -- The psychotropic prescription CTE identifies any patient who has had at least one psychotropic prescription while in the cohort. Both past and active prescriptions are considered.
+-- -- Question for Anne: is the medication list for psychotropic prescriptions the same? 
 psychotropic_prescription AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
@@ -230,23 +266,6 @@ psychotropic_prescription AS (
 	LEFT OUTER JOIN medication_data_default mdd
 		ON c.patient_id = mdd.patient_id
 	WHERE mdd.start_date >= c.intake_date AND (mdd.start_date <= c.discharge_date OR c.discharge_date IS NULL) AND mdd.coded_drug_name IN ('AMITRIPTYLINE hydrochloride, 25 mg, tab.','BIPERIDEN hydrochloride, 2 mg, tab','CARBAMAZEPINE, 100 mg, tab.','CARBAMAZEPINE, 200 mg, tab.','CHLORPROMAZINE hydrochloride, eq. 100mg base, tab.','CHLORPROMAZINE hydrochloride, eq. 25mg base, tab.','DIAZEPAM, 5 mg, tab.','DIAZEPAM, 5 mg/ml, 2 ml, amp.','FLUOXETINE hydrochloride, eq. 20 mg base, caps.','FLUPHENAZINE decanoate, 25mg/ml, 1ml, amp.','HALOPERIDOL 0.5mg, tab.','HALOPERIDOL decanoate, 50mg/ml, 1ml, amp.','HALOPERIDOL, 2 mg/ml, oral sol., 100 ml, bot. with pipette','HALOPERIDOL, 5 mg, tab.','HALOPERIDOL, 5 mg/ml, 1 ml, amp.','HYDROXYZINE dihydrochloride, 25 mg, tab.','OLANZAPINE, 10 mg, tab.','OLANZAPINE, 2.5 mg, tab.','OLANZAPINE, 5mg, tab.','PAROXETINE, 20 mg, breakable tab.','PHENOBARBITAL, 30 mg, tab.','PHENOBARBITAL, 50 mg, tab.','PHENOBARBITAL, 60 mg, tab.','PHENYTOIN sodium, 100 mg, tab.','PHENYTOIN, 30 mg/5ml, oral susp., 500ml, bot.','PROMETHAZINE hydrochloride, eq. 25 mg base, tab.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 1 ml, amp.','PROMETHAZINE hydrochloride, eq. 25 mg/ml base, 2 ml, amp.','RISPERIDONE, 1 mg, tab.','RISPERIDONE, 2 mg, tab.','SERTRALINE hydrochloride, eq. 100mg base, tab.','SERTRALINE hydrochloride, eq. 50mg base, tab.','TRIHEXYPHENIDYL hydrochloride, 2 mg, tab.','VALPROATE SODIUM, 200 mg, gastro-resistant tab.','VALPROATE SODIUM, 200mg/5ml, 300 ml, bot.','VALPROATE SODIUM, 500 mg, gastro-resistant tab.')),
--- The visit location CTE finds the last visit location reported across all clinical consultaiton/session forms.
-last_visit_location AS (	
-	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
-		vl.visit_location AS visit_location
-	FROM cohort c
-	LEFT OUTER JOIN (
-		SELECT date::date, patient_id, visit_location FROM mental_health_intake WHERE visit_location IS NOT NULL
-		UNION SELECT date::date, patient_id, visit_location FROM psy_counselors_initial_assessment WHERE visit_location IS NOT NULL 
-		UNION SELECT date::date, patient_id, visit_location FROM psychiatrist_mhgap_initial_assessment WHERE visit_location IS NOT NULL 
-		UNION SELECT date::date, patient_id, visit_location FROM psy_counselors_follow_up WHERE visit_location IS NOT NULL 
-		UNION SELECT date::date, patient_id, visit_location FROM psychiatrist_mhgap_follow_up WHERE visit_location IS NOT NULL
-		UNION SELECT discharge_date AS date, patient_id, visit_location FROM mental_health_discharge WHERE visit_location IS NOT NULL) vl
-		ON c.patient_id = vl.patient_id
-	WHERE vl.date >= c.intake_date AND (vl.date <= c.discharge_date OR c.discharge_date IS NULL)
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date, vl.visit_location
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC),
 -- The visit date CTE finds the last visit reported across all clinical consultaiton/session forms.
 last_visit_date AS (	
 	SELECT 
@@ -313,6 +332,12 @@ SELECT
 		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND c.discharge_date IS NULL THEN 'Yes'
 		ELSE null
 	END AS in_cohort,
+	CASE 
+		WHEN (mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL) AND (mhdx.focal_epilepsy IS NOT NULL OR mhdx.generalised_epilepsy IS NOT NULL OR mhdx.unclassified_epilepsy IS NOT NULL) THEN 'Eplilespy' 
+		WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND (mhdx.focal_epilepsy IS NULL AND mhdx.generalised_epilepsy IS NULL AND mhdx.unclassified_epilepsy IS NULL) THEN 'Mental Health' 
+		WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND (mhdx.focal_epilepsy IS NOT NULL OR mhdx.generalised_epilepsy IS NOT NULL OR mhdx.unclassified_epilepsy IS NOT NULL) THEN 'Mental Health + Eplilespy' 
+		ELSE NULL 
+	END AS cohort, 
 	c.readmission,
 	CASE 
 		WHEN fpia.date IS NOT NULL AND fcia.date IS NULL AND fpia.date = c.discharge_date THEN 'Yes'
@@ -321,16 +346,6 @@ SELECT
 		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date > fpia.date::date AND fpia.date = c.discharge_date THEN 'Yes'
 		ELSE NULL
 	END	AS same_day_discharge,
-	mhi.visit_location AS entry_visit_location,
-	CASE 
-		WHEN lvl.visit_location IS NOT NULL THEN lvl.visit_location
-		WHEN lvl.visit_location IS NULL THEN mhi.visit_location 
-		ELSE NULL 
-	END AS last_visit_location,
-	CASE 
-		WHEN mhi.visit_location != lvl.visit_location THEN 'Yes'
-		ELSE NULL
-	END AS clinic_change,
 	lvd.last_visit_date,
 	lvd.last_visit,
 	mhi.source_of_initial_patient_referral,
@@ -394,10 +409,17 @@ SELECT
 	mhdx.severe_depressive_episode_with_psychotic_symptoms AS "diagnosis: severe depressive episode with psychotic symptoms",
 	mhdx.severe_depressive_episode_without_psychotic_symptoms AS "diagnosis: severe depressive episode without psychotic symptoms",
 	mhdx.somatoform_disorders AS "diagnosis: somatoform disorders",
+	mhdx.other_mh AS "diagnosis: other mental health diagnosis",
 	mhdx.focal_epilepsy AS "diagnosis: focal epilepsy",
 	mhdx.generalised_epilepsy AS "diagnosis: generalised epilepsy",
 	mhdx.unclassified_epilepsy AS "diagnosis: unclassified epilepsy",
-	mhdx.other_mh AS "diagnosis: other mental health diagnosis",
+	CASE WHEN mhdx.focal_epilepsy IS NOT NULL OR mhdx.generalised_epilepsy IS NOT NULL OR mhdx.unclassified_epilepsy IS NOT NULL THEN 'Yes' ELSE NULL END AS "diagnosis: any epilepsy",
+	fmf.age_at_onset_of_seizure_in_years,
+	lmf.last_mhgap_date,
+	lmf.pregnant_last_visit,
+	lmf.hospitalised_last_visit,
+	lmf.missed_medication_last_visit,
+	lmf.seizures_last_visit,
 	mhd.visit_location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
 	mhd.type_of_activity AS discharge_type_of_activity,
@@ -439,6 +461,10 @@ LEFT OUTER JOIN mental_health_discharge mhd
 	ON c.discharge_encounter_id = mhd.encounter_id
 LEFT OUTER JOIN last_mh_diagnosis mhdx
 	ON c.intake_encounter_id = mhdx.intake_encounter_id 
+LEFT OUTER JOIN first_mhgap_form fmf
+	ON c.intake_encounter_id = fmf.intake_encounter_id 
+LEFT OUTER JOIN last_mhgap_form lmf
+	ON c.intake_encounter_id = lmf.intake_encounter_id 
 LEFT OUTER JOIN counselor_ia cia 
 	ON c.intake_encounter_id = cia.intake_encounter_id
 LEFT OUTER JOIN counselor_fu_individual cfui 
@@ -453,7 +479,5 @@ LEFT OUTER JOIN psy_fu_other pfuo
 	ON c.intake_encounter_id = pfuo.intake_encounter_id
 LEFT OUTER JOIN psychotropic_prescription pp
 	ON c.intake_encounter_id = pp.intake_encounter_id
-LEFT OUTER JOIN last_visit_location lvl
-	ON c.intake_encounter_id = lvl.intake_encounter_id
 LEFT OUTER JOIN last_visit_date lvd
 	ON c.intake_encounter_id = lvd.intake_encounter_id;
