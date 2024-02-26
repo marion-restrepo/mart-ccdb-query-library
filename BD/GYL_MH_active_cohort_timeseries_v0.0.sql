@@ -104,6 +104,50 @@ last_mh_diagnosis AS (
 	UNION
 	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
 	GROUP BY mhdu.patient_id, intake_encounter_id),	
+-- The Syndrome CTEs pivot syndrome data horizontally from the MH counselor initial assessment form. If more than one form is filled per cohort enrollment than the data from the last form is reported. 
+syndrome_pivot AS (
+	SELECT 
+		DISTINCT ON (pcia.patient_id, pcia.date) pcia.patient_id, 
+		pcia.date::date,
+		MAX (CASE WHEN pcia.main_syndrome IS NOT NULL THEN pcia.main_syndrome ELSE NULL END) AS main_syndrome,	
+		MAX (CASE WHEN pcia.additional_syndrome IS NOT NULL THEN pcia.additional_syndrome ELSE NULL END) AS additional_syndrome,
+		MAX (CASE WHEN pcia.main_syndrome = 'Depression' OR pcia.additional_syndrome = 'Depression'  THEN 1 ELSE NULL END) AS depression,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Anxiety disorder' OR pcia.additional_syndrome = 'Anxiety disorder'  THEN 1 ELSE NULL END) AS anxiety_disorder,
+		MAX (CASE WHEN pcia.main_syndrome = 'Trauma related symptoms' OR pcia.additional_syndrome = 'Trauma related symptoms'  THEN 1 ELSE NULL END) AS trauma_related_symptoms,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Adult behavioral / substance problem' OR pcia.additional_syndrome = 'Adult behavioral / substance problem'  THEN 1 ELSE NULL END) AS adult_behavioral_substance_problem,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Child behavioral problem' OR pcia.additional_syndrome = 'Child behavioral problem'  THEN 1 ELSE NULL END) AS child_behavioral_problem,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Psychosis' OR pcia.additional_syndrome = 'Psychosis'  THEN 1 ELSE NULL END) AS psychosis,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Psychosomatic problems' OR pcia.additional_syndrome = 'Psychosomatic problems'  THEN 1 ELSE NULL END) AS psychosomatic_problems,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Neurocognitive problem' OR pcia.additional_syndrome = 'Neurocognitive problem'  THEN 1 ELSE NULL END) AS neurocognitive_problem,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Epilepsy' OR pcia.additional_syndrome = 'Epilepsy'  THEN 1 ELSE NULL END) AS epilepsy,	
+		MAX (CASE WHEN pcia.main_syndrome = 'Other' OR pcia.additional_syndrome = 'Other'  THEN 1 ELSE NULL END) AS other_syndrome
+	FROM psy_counselors_initial_assessment pcia
+	GROUP BY pcia.patient_id, pcia.date),
+last_syndrome AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
+		c.intake_encounter_id,
+		c.intake_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		sp.date,
+		sp.main_syndrome,
+		sp.additional_syndrome,
+		sp.depression,	
+		sp.anxiety_disorder,
+		sp.trauma_related_symptoms,	
+		sp.adult_behavioral_substance_problem,	
+		sp.child_behavioral_problem,	
+		sp.psychosis,	
+		sp.psychosomatic_problems,	
+		sp.neurocognitive_problem,	
+		sp.epilepsy,	
+		sp.other_syndrome
+	FROM cohort c
+	LEFT OUTER JOIN syndrome_pivot sp
+		ON c.patient_id = sp.patient_id AND c.intake_date <= sp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= sp.date
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, sp.date, sp.main_syndrome, sp.additional_syndrome,sp.depression, sp.anxiety_disorder, sp.trauma_related_symptoms, sp.adult_behavioral_substance_problem, sp.child_behavioral_problem, sp.psychosis, sp.psychosomatic_problems, sp.neurocognitive_problem, sp.epilepsy, sp.other_syndrome
+	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, sp.date DESC),
 -- The following CTEs create the active patient calculation by counting each day the cumulative admissions and exits from the cohort.
 active_patients AS (
 	SELECT
@@ -119,12 +163,16 @@ active_patients AS (
 			WHEN (mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL) AND (mhdx.focal_epilepsy IS NOT NULL OR mhdx.generalised_epilepsy IS NOT NULL OR mhdx.unclassified_epilepsy IS NOT NULL) THEN 'Epilepsy' 
 			WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND (mhdx.focal_epilepsy IS NULL AND mhdx.generalised_epilepsy IS NULL AND mhdx.unclassified_epilepsy IS NULL) THEN 'Mental Health' 
 			WHEN (mhdx.acute_transient_psychotic_disorder IS NOT NULL OR mhdx.acute_stress_reaction IS NOT NULL OR mhdx.adjustment_disorders IS NOT NULL OR mhdx.anxiety_disorder IS NOT NULL OR mhdx.bipolar_disorder IS NOT NULL OR mhdx.childhood_emotional_disorder IS NOT NULL OR mhdx.conduct_disorders IS NOT NULL OR mhdx.delirium IS NOT NULL OR mhdx.dementia IS NOT NULL OR mhdx.dissociative_conversion_disorder IS NOT NULL OR mhdx.dissociative_convulsions IS NOT NULL OR mhdx.hyperkinetic_disorder IS NOT NULL OR mhdx.intellectual_disability IS NOT NULL OR mhdx.disorders_due_drug_psychoactive_substances IS NOT NULL OR mhdx.disorders_due_alcohol IS NOT NULL OR mhdx.mild_depressive_episode IS NOT NULL OR mhdx.moderate_depressive_episode IS NOT NULL OR mhdx.nonorganic_enuresis IS NOT NULL OR mhdx.obsessive_compulsive_disorder IS NOT NULL OR mhdx.panic_disorder IS NOT NULL OR mhdx.pervasive_developmental_disorder IS NOT NULL OR mhdx.postpartum_depression IS NOT NULL OR mhdx.postpartum_psychosis IS NOT NULL OR mhdx.ptsd IS NOT NULL OR mhdx.schizophrenia IS NOT NULL OR mhdx.severe_depressive_episode_with_psychotic_symptoms IS NOT NULL OR mhdx.severe_depressive_episode_without_psychotic_symptoms IS NOT NULL OR mhdx.somatoform_disorders IS NOT NULL OR mhdx.other_mh IS NOT NULL) AND (mhdx.focal_epilepsy IS NOT NULL OR mhdx.generalised_epilepsy IS NOT NULL OR mhdx.unclassified_epilepsy IS NOT NULL) THEN 'Mental Health + Epilepsy' 
+			WHEN (mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL AND mhdx.focal_epilepsy IS NULL AND mhdx.generalised_epilepsy IS NULL AND mhdx.unclassified_epilepsy IS NULL AND ls.depression IS NULL AND ls.anxiety_disorder IS NULL AND ls.trauma_related_symptoms IS NULL AND ls.child_behavioral_problem IS NULL AND ls.psychosis IS NULL AND ls.psychosomatic_problems IS NULL AND ls.neurocognitive_problem IS NULL AND ls.other_syndrome IS NULL) AND ls.epilepsy IS NOT NULL THEN 'Epilepsy'
+			WHEN (mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL AND mhdx.focal_epilepsy IS NULL AND mhdx.generalised_epilepsy IS NULL AND mhdx.unclassified_epilepsy IS NULL AND ls.epilepsy IS NULL) AND (ls.depression IS NOT NULL OR ls.anxiety_disorder IS NOT NULL OR ls.trauma_related_symptoms IS NOT NULL OR ls.child_behavioral_problem IS NOT NULL OR ls.psychosis IS NOT NULL OR ls.psychosomatic_problems IS NOT NULL OR ls.neurocognitive_problem IS NOT NULL OR ls.other_syndrome IS NOT NULL) THEN 'Mental Health'
+			WHEN (mhdx.acute_transient_psychotic_disorder IS NULL AND mhdx.acute_stress_reaction IS NULL AND mhdx.adjustment_disorders IS NULL AND mhdx.anxiety_disorder IS NULL AND mhdx.bipolar_disorder IS NULL AND mhdx.childhood_emotional_disorder IS NULL AND mhdx.conduct_disorders IS NULL AND mhdx.delirium IS NULL AND mhdx.dementia IS NULL AND mhdx.dissociative_conversion_disorder IS NULL AND mhdx.dissociative_convulsions IS NULL AND mhdx.hyperkinetic_disorder IS NULL AND mhdx.intellectual_disability IS NULL AND mhdx.disorders_due_drug_psychoactive_substances IS NULL AND mhdx.disorders_due_alcohol IS NULL AND mhdx.mild_depressive_episode IS NULL AND mhdx.moderate_depressive_episode IS NULL AND mhdx.nonorganic_enuresis IS NULL AND mhdx.obsessive_compulsive_disorder IS NULL AND mhdx.panic_disorder IS NULL AND mhdx.pervasive_developmental_disorder IS NULL AND mhdx.postpartum_depression IS NULL AND mhdx.postpartum_psychosis IS NULL AND mhdx.ptsd IS NULL AND mhdx.schizophrenia IS NULL AND mhdx.severe_depressive_episode_with_psychotic_symptoms IS NULL AND mhdx.severe_depressive_episode_without_psychotic_symptoms IS NULL AND mhdx.somatoform_disorders IS NULL AND mhdx.other_mh IS NULL AND mhdx.focal_epilepsy IS NULL AND mhdx.generalised_epilepsy IS NULL AND mhdx.unclassified_epilepsy IS NULL) AND ls.epilepsy IS NOT NULL AND (ls.depression IS NOT NULL OR ls.anxiety_disorder IS NOT NULL OR ls.trauma_related_symptoms IS NOT NULL OR ls.child_behavioral_problem IS NOT NULL OR ls.psychosis IS NOT NULL OR ls.psychosomatic_problems IS NOT NULL OR ls.neurocognitive_problem IS NOT NULL OR ls.other_syndrome IS NOT NULL) THEN 'Mental Health + Epilepsy'
 			ELSE NULL 
 		END AS cohort
 	FROM cohort c
-	LEFT OUTER JOIN first_psy_initial_assessment fpia USING(intake_encounter_id)
-	LEFT OUTER JOIN first_clinician_initial_assessment fcia USING(intake_encounter_id)
-	LEFT OUTER JOIN last_mh_diagnosis mhdx USING(intake_encounter_id)
+	LEFT OUTER JOIN first_psy_initial_assessment fpia ON c.intake_encounter_id = fpia.intake_encounter_id
+	LEFT OUTER JOIN first_clinician_initial_assessment fcia ON c.intake_encounter_id = fcia.intake_encounter_id
+	LEFT OUTER JOIN last_mh_diagnosis mhdx ON c.intake_encounter_id = mhdx.intake_encounter_id
+	LEFT OUTER JOIN last_syndrome ls ON c.intake_encounter_id = ls.intake_encounter_id
 	WHERE fpia.date IS NOT NULL OR fcia.date IS NOT NULL),
 range_values AS (
 	SELECT 
