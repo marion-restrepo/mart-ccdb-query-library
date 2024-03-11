@@ -18,7 +18,7 @@ consultations_cte AS (
 		pcia.intervention_setting,
 		'Individual session' AS type_of_activity,
 		'Initial' AS visit_type,
-		'Counselor' AS provider_type,
+		CASE WHEN provider_type IS NULL THEN 'Counselor' ELSE provider_type END AS provider_type,
 		pcia.encounter_id
 	FROM psy_counselors_initial_assessment pcia 
 	UNION
@@ -29,7 +29,7 @@ consultations_cte AS (
 		pmia.intervention_setting,
 		'Individual session' AS type_of_activity,
 		'Initial' AS visit_type,
-		'Psychiatrist' AS provider_type,
+		CASE WHEN provider_type IS NULL THEN 'Psychiatrist' ELSE provider_type END AS provider_type,
 		pmia.encounter_id
 	FROM psychiatrist_mhgap_initial_assessment pmia
 	UNION
@@ -40,7 +40,7 @@ consultations_cte AS (
 		pcfu.intervention_setting,
 		pcfu.type_of_activity,
 		'Follow up' AS visit_type,
-		'Counselor' AS provider_type,
+		CASE WHEN provider_type IS NULL THEN 'Counselor' ELSE provider_type END AS provider_type,
 		pcfu.encounter_id
 	FROM psy_counselors_follow_up pcfu 
 	UNION
@@ -51,7 +51,7 @@ consultations_cte AS (
 		pmfu.intervention_setting,
 		pmfu.type_of_activity,
 		'Follow up' AS visit_type,
-		'Psychiatrist' AS provider_type,
+		CASE WHEN provider_type IS NULL THEN 'Psychiatrist' ELSE provider_type END AS provider_type,
 		pmfu.encounter_id
 	FROM psychiatrist_mhgap_follow_up pmfu)
 -- Main query --
