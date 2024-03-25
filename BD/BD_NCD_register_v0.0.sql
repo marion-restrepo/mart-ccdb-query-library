@@ -41,7 +41,7 @@ last_form AS (
 		last_form_type AS last_form_type
 	FROM cohort c
 	LEFT OUTER JOIN (SELECT patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date 
-	ELSE date END AS date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
+	ELSE date END AS date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, CASE WHEN date_of_sample_collection IS NOT NULL THEN date_of_sample_collection ELSE date END AS date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
 		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
@@ -274,7 +274,7 @@ last_form_location AS (
 		nvsl.date AS last_form_date,
 		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, CASE WHEN date_of_sample_collection IS NOT NULL THEN date_of_sample_collection ELSE date END AS date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
 		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
 	WHERE nvsl.visit_location IS NOT NULL
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
@@ -292,7 +292,7 @@ last_bp AS (
 		vli.diastolic_blood_pressure
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.systolic_blood_pressure IS NOT NULL AND vli.diastolic_blood_pressure IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
 -- The last BMI CTE extracts the last BMI measurement reported per cohort enrollment. Uses date reported on form. If no date is present, uses date of sample collection. If neither date or date of sample collection are present, results are not considered. 
@@ -307,7 +307,7 @@ last_bmi AS (
 		vli.bmi_kg_m2 AS last_bmi
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.bmi_kg_m2 IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
 -- The last fasting blood glucose CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
@@ -322,7 +322,7 @@ last_fbg AS (
 		vli.fasting_blood_glucose_mg_dl AS last_fbg
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.fasting_blood_glucose_mg_dl IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last HbA1c CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
@@ -337,7 +337,7 @@ last_hba1c AS (
 		vli.hba1c AS last_hba1c
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hba1c IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last GFR CTE extracts the last GFR measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
@@ -352,7 +352,7 @@ last_gfr AS (
 		vli.gfr_ml_min_1_73m2 AS last_gfr
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.gfr_ml_min_1_73m2 IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last creatinine CTE extracts the last creatinine measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
@@ -367,7 +367,7 @@ last_creatinine AS (
 		vli.creatinine_mg_dl AS last_creatinine
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.creatinine_mg_dl IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last urine protein CTE extracts the last urine protein result reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
@@ -382,7 +382,7 @@ last_urine_protein AS (
 		vli.urine_protein AS last_urine_protein
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= vli.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= vli.date::date
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.urine_protein IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC)
 -- Main query --
