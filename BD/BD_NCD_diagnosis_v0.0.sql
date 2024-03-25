@@ -5,9 +5,9 @@ WITH initial AS (
 	FROM ncd WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.ncd_hep_b_patient_outcome AS patient_outcome
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome AS patient_outcome
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, ncd_hep_b_patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
+	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The NCD diagnosis CTE select the last reported NCD diagnosis per cohort enrollment. 
 cohort_diagnosis AS (
