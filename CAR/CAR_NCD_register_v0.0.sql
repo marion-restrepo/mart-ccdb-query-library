@@ -55,7 +55,9 @@ dernière_diagnostic_cohorte_pivot AS (
 		MAX (CASE WHEN diagnostic = 'Tuberculose extrapulmonaire' THEN 1 ELSE NULL END) AS tb_extrapulmonaire,
 		MAX (CASE WHEN diagnostic = 'Infection par le VIH' THEN 1 ELSE NULL END) AS vih,
 		MAX (CASE WHEN diagnostic = 'Troubles de santé mentale' THEN 1 ELSE NULL END) AS troubles_de_santé_mentale,
-		MAX (CASE WHEN diagnostic = 'Autre' THEN 1 ELSE NULL END) AS autre_diagnostic	
+		MAX (CASE WHEN diagnostic = 'Autre' THEN 1 ELSE NULL END) AS autre_diagnostic,
+		MAX (CASE WHEN diagnostic IN ('Asthme','Drépanocytose','Insuffisance renale chronique','Maladie cardiovasculaire','Bronchopneumopathie chronique obstructive','Diabète sucré de type 1','Diabète sucré de type 2','Hypertension','Hypothyroïdie','Hyperthyroïdie','Épilepsie focale','Épilepsie généralisée','Épilepsie non classifiée','Autre') THEN 1 ELSE NULL END) AS mnt,
+		MAX (CASE WHEN diagnostic IN ('Tuberculose pulmonaire','Tuberculose extrapulmonaire') THEN 1 ELSE NULL END) AS tb		
 	FROM dernière_diagnostic_cohorte
 	GROUP BY encounter_id_inclusion, patient_id, date),
 dernière_diagnostic_cohorte_liste AS (
@@ -144,6 +146,7 @@ SELECT
 	lf.dernière_fiche_type,	
 	c.date_de_sortie,
 	c.statut_de_sortie,
+	CASE WHEN lndx.mnt = 1 AND lndx.tb IS NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'MNT' WHEN lndx.mnt IS NULL AND lndx.tb = 1 AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'TB' WHEN lndx.mnt IS NULL AND lndx.tb IS NULL AND lndx.vih = 1 AND lndx.troubles_de_santé_mentale IS NULL THEN 'VIH' WHEN lndx.mnt IS NULL AND lndx.tb IS NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale = 1 THEN 'Santé mentale' WHEN lndx.mnt = 1 AND lndx.tb IS NULL AND lndx.vih = 1 AND lndx.troubles_de_santé_mentale IS NULL THEN 'MNT + VIH' ELSE NULL END AS cohorte,
 	lndx.asthme,
 	lndx.drépanocytose,
 	lndx.insuffisance_renal_chronique,
