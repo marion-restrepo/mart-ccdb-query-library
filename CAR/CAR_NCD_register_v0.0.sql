@@ -5,7 +5,7 @@ WITH inclusion AS (
 	FROM mnt_vih_tb WHERE type_de_visite = 'Inclusion'),
 cohorte AS (
 	SELECT
-		i.patient_id, i.encounter_id_inclusion, i.lieu_de_visite_inclusion, i.date_inclusion, CASE WHEN i.inclusion_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS encounter_id_sortie, CASE WHEN d.date_de_sortie IS NOT NULL THEN d.date_de_sortie WHEN d.date_de_sortie IS NULL THEN d.date ELSE NULL END AS date_de_sortie, d.statut_de_sortie AS statut_de_sortie
+		i.patient_id, i.encounter_id_inclusion, i.lieu_de_visite_inclusion, i.date_inclusion, CASE WHEN i.inclusion_visit_order > 1 THEN 'Oui' END readmission, d.encounter_id AS encounter_id_sortie, CASE WHEN d.date_de_sortie IS NOT NULL THEN d.date_de_sortie WHEN d.date_de_sortie IS NULL THEN d.date ELSE NULL END AS date_de_sortie, d.statut_de_sortie AS statut_de_sortie
 	FROM inclusion i
 	LEFT JOIN (SELECT patient_id, date, encounter_id, date_de_sortie, statut_de_sortie FROM mnt_vih_tb WHERE type_de_visite = 'Sortie') d 
 		ON i.patient_id = d.patient_id AND d.date >= i.date_inclusion AND (d.date < i.date_inclusion_suivi OR i.date_inclusion_suivi IS NULL)),
@@ -22,7 +22,7 @@ dernière_fiche AS (
 		ON c.patient_id = nvsl.patient_id AND c.date_inclusion <= nvsl.date::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= nvsl.date::date
 	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, nvsl.date, nvsl.dernière_fiche_type, nvsl.form_field_path
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, nvsl.date DESC),
--- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
+-- The diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
 diagnostic_cohorte AS (
 	SELECT
 		d.patient_id, c.encounter_id_inclusion, n.date, d.diagnostic
@@ -33,35 +33,36 @@ dernière_diagnostic_cohorte AS (
 	SELECT cd.patient_id, cd.encounter_id_inclusion, cd.date, cd.diagnostic
 	FROM diagnostic_cohorte cd
 	INNER JOIN (SELECT encounter_id_inclusion, MAX(date) AS max_date FROM diagnostic_cohorte GROUP BY encounter_id_inclusion) cd2 ON cd.encounter_id_inclusion = cd2.encounter_id_inclusion AND cd.date = cd2.max_date),
-last_ncd_diagnosis_pivot AS (
+dernière_diagnostic_cohorte_pivot AS (
 	SELECT 
 		DISTINCT ON (encounter_id_inclusion, patient_id, date) encounter_id_inclusion, 
 		patient_id, 
 		date,
 		MAX (CASE WHEN diagnostic = 'Asthme' THEN 1 ELSE NULL END) AS asthme,
 		MAX (CASE WHEN diagnostic = 'Drépanocytose' THEN 1 ELSE NULL END) AS drépanocytose,
-		MAX (CASE WHEN diagnostic = 'Maladie rénale chronique' THEN 1 ELSE NULL END) AS maladie_rénale_chronique,
+		MAX (CASE WHEN diagnostic = 'Insuffisance renale chronique' THEN 1 ELSE NULL END) AS insuffisance_renal_chronique,
 		MAX (CASE WHEN diagnostic = 'Maladie cardiovasculaire' THEN 1 ELSE NULL END) AS maladie_cardiovasculaire,
-		MAX (CASE WHEN diagnostic = 'Maladie pulmonaire obstructive chronique' THEN 1 ELSE NULL END) AS maladie_pulmonaire_obstructive_chronique,
+		MAX (CASE WHEN diagnostic = 'Bronchopneumopathie chronique obstructive' THEN 1 ELSE NULL END) AS bronchopneumopathie_chronique_obstructive,
 		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 1' THEN 1 ELSE NULL END) AS diabète_type1,
 		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 2' THEN 1 ELSE NULL END) AS diabète_type2,
 		MAX (CASE WHEN diagnostic = 'Hypertension' THEN 1 ELSE NULL END) AS hypertension,
 		MAX (CASE WHEN diagnostic = 'Hypothyroïdie' THEN 1 ELSE NULL END) AS hypothyroïdie,
 		MAX (CASE WHEN diagnostic = 'Hyperthyroïdie' THEN 1 ELSE NULL END) AS hyperthyroïdie,
-		MAX (CASE WHEN diagnostic = 'Epilepsie focale' THEN 1 ELSE NULL END) AS epilepsie_focale,
-		MAX (CASE WHEN diagnostic = 'Epilepsie généralisée' THEN 1 ELSE NULL END) AS epilepsie_généralisée,
-		MAX (CASE WHEN diagnostic = 'Epilepsie non classifiée' THEN 1 ELSE NULL END) AS epilepsie_non_classifiée,
-		MAX (CASE WHEN diagnostic = 'Tuberculose Pulmonaire' THEN 1 ELSE NULL END) AS tb_pulmonaire,
+		MAX (CASE WHEN diagnostic = 'Épilepsie focale' THEN 1 ELSE NULL END) AS epilepsie_focale,
+		MAX (CASE WHEN diagnostic = 'Épilepsie généralisée' THEN 1 ELSE NULL END) AS epilepsie_généralisée,
+		MAX (CASE WHEN diagnostic = 'Épilepsie non classifiée' THEN 1 ELSE NULL END) AS epilepsie_non_classifiée,
+		MAX (CASE WHEN diagnostic = 'Tuberculose pulmonaire' THEN 1 ELSE NULL END) AS tb_pulmonaire,
 		MAX (CASE WHEN diagnostic = 'Tuberculose extrapulmonaire' THEN 1 ELSE NULL END) AS tb_extrapulmonaire,
 		MAX (CASE WHEN diagnostic = 'Infection par le VIH' THEN 1 ELSE NULL END) AS vih,
+		MAX (CASE WHEN diagnostic = 'Troubles de santé mentale' THEN 1 ELSE NULL END) AS troubles_de_santé_mentale
 		MAX (CASE WHEN diagnostic = 'Autre' THEN 1 ELSE NULL END) AS autre_diagnostic	
 	FROM dernière_diagnostic_cohorte
 	GROUP BY encounter_id_inclusion, patient_id, date),
-last_ncd_diagnosis_list AS (
+dernière_diagnostic_cohorte_liste AS (
 	SELECT encounter_id_inclusion, STRING_AGG(diagnostic, ', ') AS liste_diagnostic
 	FROM dernière_diagnostic_cohorte
 	GROUP BY encounter_id_inclusion),
--- The last visit location CTE finds the last visit location reported in NCD forms.
+-- The last visit location CTE finds the last visit location reported in clinical forms.
 dernière_fiche_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion,
@@ -111,19 +112,19 @@ SELECT
 		WHEN pa."Civil_status" = 'Widowed' THEN 'Veuf(ve)' 
 		WHEN pa."Civil_status" = 'Separated' THEN 'Séparé' 
 		WHEN pa."Civil_status" = 'Other' THEN 'Autre' 
-		ELSE NULL END AS statut_civil,
+	ELSE NULL END AS statut_civil,
 	CASE 
 		WHEN pa."Education_level" = 'No formal education' THEN 'Pas éducation formelle'
 		WHEN pa."Education_level" = 'Intermittent schooling' THEN 'Scolarisation intermittente'  
 		WHEN pa."Education_level" = 'Primary school education' THEN 'École primaire'  
 		WHEN pa."Education_level" = 'High school' THEN 'École secondaire'  
 		WHEN pa."Education_level" = 'College/University' THEN 'Collège/Université' 
-		ELSE NULL END AS niveau_education,
+	ELSE NULL END AS niveau_education,
 	CASE 
 		WHEN pa."Occupation" = '' THEN 'oui – rémunéré'
 		WHEN pa."Occupation" = '' THEN 'oui – non rémunéré'
 		WHEN pa."Occupation" = '' THEN 'non, Autre'
-		ELSE NULL END AS activite,
+	ELSE NULL END AS activite,
 	CASE 
 		WHEN pa."Living_conditions" = 'Unstable accommodation' THEN 'Logement instable'
 		WHEN pa."Living_conditions" = 'Stable accommodation' THEN 'Logement stable'
@@ -131,11 +132,11 @@ SELECT
 		WHEN pa."Living_conditions" = 'In transit' THEN 'En transit/déménagement'
 		WHEN pa."Living_conditions" = 'Homeless' THEN 'Sans domicile fixe'
 		WHEN pa."Living_conditions" = 'Other' THEN 'Autre'
-		ELSE NULL END AS condition_habitation,
+	ELSE NULL END AS condition_habitation,
 	c.date_inclusion AS date_inclusion,
-	CASE WHEN c.date_de_sortie IS NULL THEN 'Yes' END AS en_cohorte,
-	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.date_inclusion)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.date_inclusion))) >= 6 AND c.date_de_sortie IS NULL THEN 'Yes' END AS en_cohorte_6m,
-	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.date_inclusion)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.date_inclusion))) >= 12 AND c.date_de_sortie IS NULL THEN 'Yes' END AS en_cohorte_12m,
+	CASE WHEN c.date_de_sortie IS NULL THEN 'Oui' END AS en_cohorte,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.date_inclusion)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.date_inclusion))) >= 6 AND c.date_de_sortie IS NULL THEN 'Oui' END AS en_cohorte_6m,
+	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.date_inclusion)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.date_inclusion))) >= 12 AND c.date_de_sortie IS NULL THEN 'Oui' END AS en_cohorte_12m,
 	c.readmission,
 	c.lieu_de_visite_inclusion,
 	lfl.dernière_fiche_location,
@@ -159,6 +160,7 @@ SELECT
 	lndx.tb_pulmonaire,
 	lndx.tb_extrapulmonaire,
 	lndx.vih,
+	lndx.troubles_de_santé_mentale,
 	lndx.autre_diagnostic,
 	lndl.liste_diagnostic
 FROM cohorte c
@@ -172,9 +174,9 @@ LEFT OUTER JOIN patient_encounter_details_default ped
 	ON c.encounter_id_inclusion = ped.encounter_id
 LEFT OUTER JOIN dernière_fiche lf
 	ON c.encounter_id_inclusion = lf.encounter_id_inclusion
-LEFT OUTER JOIN last_ncd_diagnosis_pivot lndx
+LEFT OUTER JOIN dernière_diagnostic_cohorte_pivot lndx
 	ON c.encounter_id_inclusion = lndx.encounter_id_inclusion
-LEFT OUTER JOIN last_ncd_diagnosis_list lndl
+LEFT OUTER JOIN dernière_diagnostic_cohorte_liste lndl
 	ON c.encounter_id_inclusion = lndl.encounter_id_inclusion
 LEFT OUTER JOIN dernière_fiche_location lfl
 	ON c.encounter_id_inclusion = lfl.encounter_id_inclusion;
