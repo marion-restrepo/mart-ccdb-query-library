@@ -56,24 +56,24 @@ diagnostic_cohorte_pivot AS (
 	SELECT 
 		DISTINCT ON (encounter_id_inclusion, patient_id) encounter_id_inclusion, 
 		patient_id,
-		MAX (CASE WHEN diagnostic = 'Asthme' THEN date ELSE NULL END) AS asthme,
-		MAX (CASE WHEN diagnostic = 'Drépanocytose' THEN date ELSE NULL END) AS drépanocytose,
-		MAX (CASE WHEN diagnostic = 'Insuffisance renale chronique' THEN date ELSE NULL END) AS insuffisance_renal_chronique,
-		MAX (CASE WHEN diagnostic = 'Maladie cardiovasculaire' THEN date ELSE NULL END) AS maladie_cardiovasculaire,
-		MAX (CASE WHEN diagnostic = 'Bronchopneumopathie chronique obstructive' THEN date ELSE NULL END) AS bronchopneumopathie_chronique_obstructive,
-		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 1' THEN date ELSE NULL END) AS diabète_type1,
-		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 2' THEN date ELSE NULL END) AS diabète_type2,
-		MAX (CASE WHEN diagnostic = 'Hypertension' THEN date ELSE NULL END) AS hypertension,
-		MAX (CASE WHEN diagnostic = 'Hypothyroïdie' THEN date ELSE NULL END) AS hypothyroïdie,
-		MAX (CASE WHEN diagnostic = 'Hyperthyroïdie' THEN date ELSE NULL END) AS hyperthyroïdie,
-		MAX (CASE WHEN diagnostic = 'Épilepsie focale' THEN date ELSE NULL END) AS épilepsie_focale,
-		MAX (CASE WHEN diagnostic = 'Épilepsie généralisée' THEN date ELSE NULL END) AS épilepsie_généralisée,
-		MAX (CASE WHEN diagnostic = 'Épilepsie non classifiée' THEN date ELSE NULL END) AS épilepsie_non_classifiée,
-		MAX (CASE WHEN diagnostic = 'Tuberculose pulmonaire' THEN date ELSE NULL END) AS tb_pulmonaire,
-		MAX (CASE WHEN diagnostic = 'Tuberculose extrapulmonaire' THEN date ELSE NULL END) AS tb_extrapulmonaire,
-		MAX (CASE WHEN diagnostic = 'Infection par le VIH' THEN date ELSE NULL END) AS vih,
-		MAX (CASE WHEN diagnostic = 'Troubles de santé mentale' THEN date ELSE NULL END) AS troubles_de_santé_mentale,
-		MAX (CASE WHEN diagnostic = 'Autre' THEN date ELSE NULL END) AS autre_diagnostic,
+		MAX (CASE WHEN diagnostic = 'Asthme' THEN date::date ELSE NULL END) AS asthme,
+		MAX (CASE WHEN diagnostic = 'Drépanocytose' THEN date::date ELSE NULL END) AS drépanocytose,
+		MAX (CASE WHEN diagnostic = 'Insuffisance renale chronique' THEN date::date ELSE NULL END) AS insuffisance_renal_chronique,
+		MAX (CASE WHEN diagnostic = 'Maladie cardiovasculaire' THEN date::date ELSE NULL END) AS maladie_cardiovasculaire,
+		MAX (CASE WHEN diagnostic = 'Bronchopneumopathie chronique obstructive' THEN date::date ELSE NULL END) AS bronchopneumopathie_chronique_obstructive,
+		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 1' THEN date::date ELSE NULL END) AS diabète_type1,
+		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 2' THEN date::date ELSE NULL END) AS diabète_type2,
+		MAX (CASE WHEN diagnostic = 'Hypertension' THEN date::date ELSE NULL END) AS hypertension,
+		MAX (CASE WHEN diagnostic = 'Hypothyroïdie' THEN date::date ELSE NULL END) AS hypothyroïdie,
+		MAX (CASE WHEN diagnostic = 'Hyperthyroïdie' THEN date::date ELSE NULL END) AS hyperthyroïdie,
+		MAX (CASE WHEN diagnostic = 'Épilepsie focale' THEN date::date ELSE NULL END) AS épilepsie_focale,
+		MAX (CASE WHEN diagnostic = 'Épilepsie généralisée' THEN date::date ELSE NULL END) AS épilepsie_généralisée,
+		MAX (CASE WHEN diagnostic = 'Épilepsie non classifiée' THEN date::date ELSE NULL END) AS épilepsie_non_classifiée,
+		MAX (CASE WHEN diagnostic = 'Tuberculose pulmonaire' THEN date::date ELSE NULL END) AS tb_pulmonaire,
+		MAX (CASE WHEN diagnostic = 'Tuberculose extrapulmonaire' THEN date::date ELSE NULL END) AS tb_extrapulmonaire,
+		MAX (CASE WHEN diagnostic = 'Infection par le VIH' THEN date::date ELSE NULL END) AS vih,
+		MAX (CASE WHEN diagnostic = 'Troubles de santé mentale' THEN date::date ELSE NULL END) AS troubles_de_santé_mentale,
+		MAX (CASE WHEN diagnostic = 'Autre' THEN date::date ELSE NULL END) AS autre_diagnostic,
 		MAX (CASE WHEN diagnostic IN ('Asthme','Drépanocytose','Insuffisance renale chronique','Maladie cardiovasculaire','Bronchopneumopathie chronique obstructive','Diabète sucré de type 1','Diabète sucré de type 2','Hypertension','Hypothyroïdie','Hyperthyroïdie','Épilepsie focale','Épilepsie généralisée','Épilepsie non classifiée','Autre') THEN 'Oui' ELSE NULL END) AS mnt,
 		MAX (CASE WHEN diagnostic IN ('Tuberculose pulmonaire','Tuberculose extrapulmonaire') THEN 'Oui' ELSE NULL END) AS tb		
 	FROM diagnostic_cohorte
@@ -245,9 +245,9 @@ SELECT
 		WHEN pa."Education_level" = 'College/University' THEN 'Collège/Université' 
 	ELSE NULL END AS niveau_education,
 	CASE 
-		WHEN pa."Occupation" = '' THEN 'oui - rémunéré'
-		WHEN pa."Occupation" = '' THEN 'oui - non rémunéré'
-		WHEN pa."Occupation" = '' THEN 'non, Autre'
+		WHEN pa."Occupation" = 'Employed' THEN 'oui - rémunéré'
+		WHEN pa."Occupation" = 'Retired' THEN 'oui - non rémunéré'
+		WHEN pa."Occupation" = 'No' THEN 'non, Autre'
 	ELSE NULL END AS activite,
 	CASE 
 		WHEN pa."Living_conditions" = 'Unstable accommodation' THEN 'Logement instable'
@@ -267,7 +267,7 @@ SELECT
 	lfl.dernière_fiche_location,
 	lf.date_derniere_visite,
 	lf.dernière_fiche_type,
-	CASE WHEN lf.date_derniere_visite < (CURRENT_DATE - INTERVAL '90 DAYS') THEN 'Oui' ELSE NULL END AS j_sans_visite,
+	CASE WHEN lf.date_derniere_visite < (CURRENT_DATE - INTERVAL '90 DAYS') THEN 'Oui' ELSE NULL END AS sans_visite_90j,
 	c.date_de_sortie,
 	c.statut_de_sortie,
 	CASE 
