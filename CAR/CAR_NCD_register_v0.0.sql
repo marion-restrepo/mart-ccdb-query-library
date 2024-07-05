@@ -112,7 +112,7 @@ instauration_arv AS (
 	WHERE mvt.date_d_instauration_des_arv IS NOT NULL
 	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date, mvt.date_d_instauration_des_arv
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date ASC),
--- The ARV medication CTE 
+-- The ARV medication CTE reports if a patient has an active perscription for an ARV medication. Medications are only considered to be active if the calculated end date is after the current date and the stopped date is null.
 médicament_arv AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion,
