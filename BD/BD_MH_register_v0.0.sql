@@ -1,4 +1,4 @@
--- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on the MH intake form and the MH discharge form. The query takes all intake dates and matches discharge dates if the discharge date falls between the intake date and the next intake date (if present).
+-- The first CTE builds the frame for patients entering and exiting the cohort. This frame is based on the MH intake form and the MH discharge form. The query takes all intake dates and matches discharge dates if the discharge date falls between the intake date and the next intake date (if present).
 WITH intake AS (
 	SELECT 
 		patient_id, encounter_id AS intake_encounter_id, date::date AS intake_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS intake_order, LEAD (date::date) OVER (PARTITION BY patient_id ORDER BY date) AS next_intake_date
@@ -11,21 +11,21 @@ cohort AS (
 		ON i.patient_id = mhd.patient_id AND mhd.discharge_date >= i.intake_date AND (mhd.discharge_date < i.next_intake_date OR i.next_intake_date IS NULL)),
 -- The first psy initial assessment CTE extracts the date from the first psy initial assessment. If multiple initial assessments are completed per cohort enrollment then the first is used.
 first_psy_initial_assessment AS (
-	SELECT DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id, pcia.date::date
+	SELECT DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id, pcia.date::date, pcia.visit_location
 	FROM cohort c
 	LEFT OUTER JOIN psy_counselors_initial_assessment pcia
 		ON c.patient_id = pcia.patient_id
 	WHERE (pcia.date::date >= c.intake_date) AND (pcia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pcia.date
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pcia.date, pcia.visit_location
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pcia.date ASC),
 -- The first clinician initial assessment CTE extracts the date from the first clinician initial assesment. If multiple initial assessments are completed per cohort enrollment then the first is used.
 first_clinician_initial_assessment AS (
-	SELECT DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id, pmia.date::date
+	SELECT DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id, pmia.date::date, pmia.visit_location
 	FROM cohort c
 	LEFT OUTER JOIN psychiatrist_mhgap_initial_assessment pmia 
 		ON c.patient_id = pmia.patient_id
 	WHERE (pmia.date::date >= c.intake_date) AND (pmia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date, pmia.visit_location
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date ASC),
 -- The Syndrome CTEs pivot syndrome data horizontally from the MH counselor initial assessment form. If more than one form is filled per cohort enrollment than the data from the last form is reported. 
 syndrome_pivot AS (
@@ -82,7 +82,7 @@ initial_cgis AS (
 	WHERE ia.date::date >= c.intake_date AND (ia.date::date <= c.discharge_date OR c.discharge_date IS NULL)
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, ia.date::date ASC),
 -- The Mental Health diagnosis CTE pivots mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported per cohort enrollment are present. 
-last_mh_main_dx AS (
+last_mh_dx AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
 		c.intake_encounter_id,
@@ -90,33 +90,19 @@ last_mh_main_dx AS (
 		c.discharge_encounter_id,
 		c.discharge_date,
 		mmhd.date,
-		mmhd.main_diagnosis AS diagnosis
+		mmhd.diagnosis
 	FROM cohort c
 	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
 		UNION
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
-last_mh_sec_dx AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
-		c.intake_encounter_id,
-		c.intake_date, 
-		c.discharge_encounter_id,
-		c.discharge_date,
-		mmhd.date,
-		mmhd.secondary_diagnosis AS diagnosis
-	FROM cohort c
-	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_follow_up
 		UNION
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
+		UNION
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_follow_up) mmhd
 		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.secondary_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
+	WHERE mmhd.diagnosis IS NOT NULL 
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.diagnosis, mmhd.category
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
 last_mh_diagnosis AS (
 	SELECT 
@@ -151,10 +137,12 @@ last_mh_diagnosis AS (
 		MAX (CASE WHEN mhdu.diagnosis = 'Severe depressive episode without psychotic symptoms' THEN 1 ELSE NULL END) AS severe_depressive_episode_without_psychotic_symptoms,
 		MAX (CASE WHEN mhdu.diagnosis = 'Somatoform disorders' THEN 1 ELSE NULL END) AS somatoform_disorders,
 		MAX (CASE WHEN mhdu.diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_mh
-	FROM (SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_main_dx
-	UNION
-	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
+	FROM last_mh_dx mhdu
 	GROUP BY mhdu.patient_id, intake_encounter_id),	
+mh_diagnosis_list AS (
+	SELECT intake_encounter_id, STRING_AGG(diagnosis, ', ') AS diagnosis_list
+	FROM last_mh_dx
+	GROUP BY intake_encounter_id),
 -- The counselor initial assessment CTE counts the number of initial counselor assessments that took place per cohort enrollment. 
 counselor_ia AS (
 	SELECT 
@@ -175,6 +163,16 @@ counselor_fu_individual AS (
 		ON c.patient_id = pcfu.patient_id
 	WHERE pcfu.date::date >= c.intake_date AND (pcfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND pcfu.type_of_activity = 'Individual session'
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
+-- The counselor follow-up CTE counts the number of other follow up counselor sessions that were of type light contact or conducted by a CHW per cohort enrollment.
+counselor_fu_light_contact_chw AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
+		COUNT(*) AS counselor_fu_light_contact_chw_sessions
+	FROM cohort c
+	LEFT OUTER JOIN psy_counselors_follow_up pcfu 
+		ON c.patient_id = pcfu.patient_id
+	WHERE pcfu.date::date >= c.intake_date AND (pcfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND (pcfu.type_of_activity = 'Light contact' OR pcfu.provider_type = 'CHW') AND pcfu.type_of_activity != 'Missed appointment'
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
 -- The counselor follow-up CTE counts the number of other follow up counselor sessions that took place per cohort enrollment, excludes individual and missed sessions. 
 counselor_fu_other AS (
 	SELECT 
@@ -183,7 +181,7 @@ counselor_fu_other AS (
 	FROM cohort c
 	LEFT OUTER JOIN psy_counselors_follow_up pcfu 
 		ON c.patient_id = pcfu.patient_id
-	WHERE pcfu.date::date >= c.intake_date AND (pcfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND (pcfu.type_of_activity != 'Individual session' OR pcfu.type_of_activity != 'Missed appointment')
+	WHERE pcfu.date::date >= c.intake_date AND (pcfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND pcfu.type_of_activity NOT IN ('Individual session', 'Light contact', 'Missed appointment') AND pcfu.provider_type != 'CHW'
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
 -- The psychiatrist initial assessment CTE counts the number of initial counselor assessments that took place per cohort enrollment. 
 psy_ia AS (
@@ -206,6 +204,16 @@ psy_fu_individual AS (
 	WHERE pmfu.date::date >= c.intake_date AND (pmfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND pmfu.type_of_activity = 'Individual session'
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
 -- The psychiatrist follow-up CTE counts the number of other follow up psychiatrist sessions that took place per cohort enrollment, excludes individual and missed sessions. 
+psy_fu_light_contact_chw AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
+		COUNT(*) AS psychiatrist_fu_light_contact_chw_sessions
+	FROM cohort c
+	LEFT OUTER JOIN psychiatrist_mhgap_follow_up pmfu 
+		ON c.patient_id = pmfu.patient_id
+	WHERE pmfu.date::date >= c.intake_date AND (pmfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND (pmfu.type_of_activity = 'Light contact' OR pmfu.provider_type = 'CHW') AND pmfu.type_of_activity != 'Missed appointment'
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
+-- The psychiatrist follow-up CTE counts the number of other follow up psychiatrist sessions that took place per cohort enrollment, excludes individual and missed sessions. 
 psy_fu_other AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
@@ -213,7 +221,7 @@ psy_fu_other AS (
 	FROM cohort c
 	LEFT OUTER JOIN psychiatrist_mhgap_follow_up pmfu 
 		ON c.patient_id = pmfu.patient_id
-	WHERE pmfu.date::date >= c.intake_date AND (pmfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND (pmfu.type_of_activity != 'Individual session' OR pmfu.type_of_activity != 'Missed appointment')
+	WHERE pmfu.date::date >= c.intake_date AND (pmfu.date::date <= c.discharge_date OR c.discharge_date IS NULL) AND pmfu.type_of_activity NOT IN ('Individual session', 'Light contact', 'Missed appointment') AND pmfu.provider_type != 'CHW'
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date),
 -- The psychotropic prescription CTE identifies any patient who has had at least one psychotropic prescription while in the cohort. Both past and active prescriptions are considered.
 psychotropic_prescription AS (
@@ -244,7 +252,7 @@ last_visit_location AS (
 	WHERE vl.date >= c.intake_date AND (vl.date <= c.discharge_date OR c.discharge_date IS NULL)
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date, vl.visit_location
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vl.date DESC),
--- The visit date CTE finds the last visit reported across all clinical consultaiton/session forms.
+-- The last visit date CTE finds the last visit reported across all clinical consultaiton/session forms.
 last_visit_date AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date) c.intake_encounter_id,
@@ -305,6 +313,13 @@ SELECT
 		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date > fpia.date::date THEN fpia.date
 		ELSE NULL
 	END	AS enrollment_date,
+	CASE 
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NULL THEN fpia.visit_location
+		WHEN fcia.date IS NOT NULL AND fpia.date IS NULL THEN fcia.visit_location
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date <= fpia.date::date THEN fcia.visit_location
+		WHEN fpia.date IS NOT NULL AND fcia.date IS NOT NULL AND fcia.date::date > fpia.date::date THEN fpia.visit_location
+		ELSE NULL
+	END	AS enrollment_location,
 	c.discharge_date,
 	CASE 
 		WHEN (fpia.date IS NOT NULL OR fcia.date IS NOT NULL) AND c.discharge_date IS NULL THEN 'Yes'
@@ -329,6 +344,7 @@ SELECT
 		ELSE NULL
 	END AS clinic_change,
 	lvd.last_visit_date,
+	(CURRENT_DATE - lvd.last_visit_date) AS days_since_last_visit,
 	lvd.last_visit,
 	mhi.source_of_initial_patient_referral,
 	CASE WHEN mhi.stressor_1 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_2 = 'Non-conflict-related medical condition' THEN 1 WHEN mhi.stressor_3 = 'Non-conflict-related medical condition' THEN 1 ELSE NULL END AS "stressor: non-conflict-related medical condition",
@@ -392,6 +408,7 @@ SELECT
 	mhdx.severe_depressive_episode_without_psychotic_symptoms AS "diagnosis: severe depressive episode without psychotic symptoms",
 	mhdx.somatoform_disorders AS "diagnosis: somatoform disorders",
 	mhdx.other_mh AS "diagnosis: other mental health diagnosis",
+	mhdl.diagnosis_list,
 	mhd.visit_location AS discharge_visit_location,
 	mhd.intervention_setting AS discharge_intervention_setting,
 	mhd.type_of_activity AS discharge_type_of_activity,
@@ -404,11 +421,13 @@ SELECT
 	COALESCE(cia.counselor_initial_consultations,0) + COALESCE(cfui.counselor_fu_individual_sessions,0) AS counselor_individual_sessions,
 	cfuo.counselor_fu_other_sessions,
 	COALESCE(cia.counselor_initial_consultations,0) + COALESCE(cfui.counselor_fu_individual_sessions,0) + COALESCE(cfuo.counselor_fu_other_sessions,0) AS counselor_sessions,
+	cfulc.counselor_fu_light_contact_chw_sessions,
 	pia.psychiatrist_initial_consultations,
 	pfui.psychiatrist_fu_individual_sessions,
 	COALESCE(pia.psychiatrist_initial_consultations,0) + COALESCE(pfui.psychiatrist_fu_individual_sessions,0) AS psychiatrist_individual_sessions,
 	pfuo.psychiatrist_fu_other_sessions,
 	COALESCE(pia.psychiatrist_initial_consultations,0) + COALESCE(pfui.psychiatrist_fu_individual_sessions,0) + COALESCE(pfuo.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
+	pfulc.psychiatrist_fu_light_contact_chw_sessions,
 	pp.psychotropic_prescription
 FROM cohort c
 LEFT OUTER JOIN patient_identifier pi
@@ -433,16 +452,22 @@ LEFT OUTER JOIN mental_health_discharge mhd
 	ON c.discharge_encounter_id = mhd.encounter_id
 LEFT OUTER JOIN last_mh_diagnosis mhdx
 	ON c.intake_encounter_id = mhdx.intake_encounter_id 
+LEFT OUTER JOIN mh_diagnosis_list mhdl 
+	ON c.intake_encounter_id = mhdl.intake_encounter_id
 LEFT OUTER JOIN counselor_ia cia 
 	ON c.intake_encounter_id = cia.intake_encounter_id
 LEFT OUTER JOIN counselor_fu_individual cfui 
 	ON c.intake_encounter_id = cfui.intake_encounter_id
+LEFT OUTER JOIN counselor_fu_light_contact_chw cfulc 
+	ON c.intake_encounter_id = cfulc.intake_encounter_id
 LEFT OUTER JOIN counselor_fu_other cfuo 
 	ON c.intake_encounter_id = cfuo.intake_encounter_id
 LEFT OUTER JOIN psy_ia pia 
 	ON c.intake_encounter_id = pia.intake_encounter_id
 LEFT OUTER JOIN psy_fu_individual pfui 
 	ON c.intake_encounter_id = pfui.intake_encounter_id
+LEFT OUTER JOIN psy_fu_light_contact_chw pfulc 
+	ON c.intake_encounter_id = pfulc.intake_encounter_id
 LEFT OUTER JOIN psy_fu_other pfuo 
 	ON c.intake_encounter_id = pfuo.intake_encounter_id
 LEFT OUTER JOIN psychotropic_prescription pp
