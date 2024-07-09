@@ -28,7 +28,7 @@ first_clinician_initial_assessment AS (
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date ASC),
 -- The Mental Health diagnosis CTEs takes only the last diagnoses reported per cohort enrollment from either the Psychiatrist mhGap initial or follow-up forms. 
-last_mh_main_dx AS (
+last_mh_dx AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
 		c.intake_encounter_id,
@@ -36,41 +36,20 @@ last_mh_main_dx AS (
 		c.discharge_encounter_id,
 		c.discharge_date,
 		mmhd.date,
-		mmhd.main_diagnosis AS diagnosis
+		mmhd.diagnosis
 	FROM cohort c
 	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
 		UNION
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
-last_mh_sec_dx AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
-		c.intake_encounter_id,
-		c.intake_date, 
-		c.discharge_encounter_id,
-		c.discharge_date,
-		mmhd.date,
-		mmhd.secondary_diagnosis AS diagnosis
-	FROM cohort c
-	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_follow_up
 		UNION
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
+		UNION
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_follow_up) mmhd
 		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.secondary_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
+	WHERE mmhd.diagnosis IS NOT NULL 
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.diagnosis, mmhd.category
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
--- The all diagnosis sub-table combines a list of the last reported mental health diagnosis for each cohort enrollment.
-all_mh_diagnosis AS (
-	SELECT mdx.patient_id, mdx.intake_encounter_id, mdx.date, mdx.diagnosis 
-	FROM last_mh_main_dx mdx
-	UNION
-	SELECT sdx.patient_id, sdx.intake_encounter_id, sdx.date, sdx.diagnosis 
-	FROM last_mh_sec_dx sdx),
 -- The visit location CTE finds the last visit location reported across all clinical consultaiton/session forms.
 last_visit_location AS (	
 	SELECT 
@@ -134,15 +113,15 @@ SELECT
 	mhi.visit_location AS entry_visit_location,
 	lvl.visit_location,
 	amhdx.diagnosis
-FROM all_mh_diagnosis amhdx
+FROM last_mh_dx amhdx
 LEFT OUTER JOIN cohort c
 	ON amhdx.intake_encounter_id = c.intake_encounter_id
 LEFT OUTER JOIN first_psy_initial_assessment fpia 
 	ON amhdx.intake_encounter_id = fpia.intake_encounter_id
 LEFT OUTER JOIN first_clinician_initial_assessment fcia 
 	ON amhdx.intake_encounter_id = fcia.intake_encounter_id
-LEFT OUTER JOIN patient_identifier pi 
-	ON amhdx.patient_id = pi.patient_id
+LEFT OUTER JOIN patient_identifier pi
+	ON c.patient_id = pi.patient_id
 LEFT OUTER JOIN person_details_default pdd 
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 

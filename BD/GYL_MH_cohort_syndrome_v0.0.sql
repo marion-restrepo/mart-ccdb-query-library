@@ -89,7 +89,7 @@ last_syndrome_pivot AS (
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, sp.date, sp.main_syndrome, sp.additional_syndrome,sp.depression, sp.anxiety_disorder, sp.trauma_related_symptoms, sp.adult_behavioral_substance_problem, sp.child_behavioral_problem, sp.psychosis, sp.psychosomatic_problems, sp.neurocognitive_problem, sp.epilepsy, sp.other_syndrome
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, sp.date DESC),
 -- The Mental Health diagnosis CTE pivots mental health diagnosis data horizontally from the Psychiatrist mhGap initial and follow-up forms. Only the last diagnoses reported per cohort enrollment are present. 
-last_mh_main_dx AS (
+last_mh_dx AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
 		c.intake_encounter_id,
@@ -97,33 +97,19 @@ last_mh_main_dx AS (
 		c.discharge_encounter_id,
 		c.discharge_date,
 		mmhd.date,
-		mmhd.main_diagnosis AS diagnosis
+		mmhd.diagnosis
 	FROM cohort c
 	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
 		UNION
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
-last_mh_sec_dx AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
-		c.intake_encounter_id,
-		c.intake_date, 
-		c.discharge_encounter_id,
-		c.discharge_date,
-		mmhd.date,
-		mmhd.secondary_diagnosis AS diagnosis
-	FROM cohort c
-	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_follow_up
 		UNION
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
+		UNION
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_follow_up) mmhd
 		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.secondary_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
+	WHERE mmhd.diagnosis IS NOT NULL 
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.diagnosis, mmhd.category 
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
 last_mh_diagnosis AS (
 	SELECT 
@@ -161,9 +147,7 @@ last_mh_diagnosis AS (
 		MAX (CASE WHEN mhdu.diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
 		MAX (CASE WHEN mhdu.diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN mhdu.diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_mh
-	FROM (SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_main_dx
-	UNION
-	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
+	FROM last_mh_dx mhdu
 	GROUP BY mhdu.patient_id, intake_encounter_id)
 -- Main query --
 SELECT 

@@ -28,7 +28,7 @@ first_clinician_initial_assessment AS (
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, pmia.date ASC),
 -- The Mental Health diagnosis CTEs takes only the last diagnoses reported per cohort enrollment from either the Psychiatrist mhGap initial or follow-up forms. 
-last_mh_main_dx AS (
+last_mh_dx AS (
 	SELECT 
 		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
 		c.intake_encounter_id,
@@ -36,41 +36,20 @@ last_mh_main_dx AS (
 		c.discharge_encounter_id,
 		c.discharge_date,
 		mmhd.date,
-		mmhd.main_diagnosis AS diagnosis
+		mmhd.diagnosis
 	FROM cohort c
 	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
 		UNION
-		SELECT patient_id, date::date, main_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
-		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.main_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.main_diagnosis 
-	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
-last_mh_sec_dx AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.intake_encounter_id) c.patient_id,
-		c.intake_encounter_id,
-		c.intake_date, 
-		c.discharge_encounter_id,
-		c.discharge_date,
-		mmhd.date,
-		mmhd.secondary_diagnosis AS diagnosis
-	FROM cohort c
-	LEFT OUTER JOIN (
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_initial_assessment
+		SELECT patient_id, date::date, main_diagnosis AS diagnosis, 'main_diagnosis' AS category FROM psychiatrist_mhgap_follow_up
 		UNION
-		SELECT patient_id, date::date, secondary_diagnosis FROM psychiatrist_mhgap_follow_up) mmhd
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_initial_assessment
+		UNION
+		SELECT patient_id, date::date, secondary_diagnosis AS diagnosis, 'secondary_diagnosis' AS category FROM psychiatrist_mhgap_follow_up) mmhd
 		ON c.patient_id = mmhd.patient_id AND c.intake_date <= mmhd.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= mmhd.date::date
-	WHERE mmhd.secondary_diagnosis IS NOT NULL 
-	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.secondary_diagnosis 
+	WHERE mmhd.diagnosis IS NOT NULL 
+	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_encounter_id, c.discharge_date, mmhd.date::date, mmhd.diagnosis, mmhd.category 
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, mmhd.date::date DESC),
--- The all diagnosis sub-table combines a list of the last reported mental health diagnosis for each cohort enrollment.
-all_mh_diagnosis AS (
-	SELECT mdx.patient_id, mdx.intake_encounter_id, mdx.date, mdx.diagnosis 
-	FROM last_mh_main_dx mdx
-	UNION
-	SELECT sdx.patient_id, sdx.intake_encounter_id, sdx.date, sdx.diagnosis 
-	FROM last_mh_sec_dx sdx),
 last_mh_diagnosis AS (
 	SELECT 
 		DISTINCT ON (mhdu.patient_id, intake_encounter_id) mhdu.patient_id, 
@@ -107,9 +86,7 @@ last_mh_diagnosis AS (
 		MAX (CASE WHEN mhdu.diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
 		MAX (CASE WHEN mhdu.diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN mhdu.diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_mh
-	FROM (SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_main_dx
-	UNION
-	SELECT patient_id, intake_encounter_id, diagnosis FROM last_mh_sec_dx) mhdu
+	FROM last_mh_dx mhdu
 	GROUP BY mhdu.patient_id, intake_encounter_id),
 -- The Syndrome CTEs pivot syndrome data horizontally from the MH counselor initial assessment form. If more than one form is filled per cohort enrollment than the data from the last form is reported. 
 syndrome_pivot AS (
@@ -205,7 +182,7 @@ SELECT
 	END AS cohort, 
 	c.readmission,
 	amhdx.diagnosis
-FROM all_mh_diagnosis amhdx
+FROM last_mh_dx amhdx
 LEFT OUTER JOIN cohort c
 	ON amhdx.intake_encounter_id = c.intake_encounter_id
 LEFT OUTER JOIN first_psy_initial_assessment fpia 
