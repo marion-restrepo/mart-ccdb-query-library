@@ -276,7 +276,10 @@ SELECT
 		WHEN lndx.mnt IS NULL AND lndx.tb IS NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'VIH' 
 		WHEN lndx.mnt IS NULL AND lndx.tb IS NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'Santé mentale' 
 		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'MNT + VIH' 
-		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'VIH + TB' 
+		WHEN lndx.mnt IS NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'VIH + TB'
+		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'MNT + TB'
+		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'MNT + Santé mentale'
+		WHEN lndx.mnt IS NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'TB + Santé mentale'  
 	ELSE NULL END AS cohorte,
 	lndx.asthme::date,
 	lndx.drépanocytose,
@@ -308,10 +311,10 @@ SELECT
 	dtv.test_vih,
 	dc.date_cd4, 
 	dc.résultat_brut_cd4,
-	dc.résultat_seuil_cd4_cellules_ml,
+	CASE WHEN dc.résultat_brut_cd4 >= 400 THEN 'Plus de 200 cellules/mL' WHEN dc.résultat_brut_cd4 < 400 THEN 'Moins de 200 cellules/mL' ELSE NULL END AS résultat_seuil_cd4_cellules_ml,
 	dcv.date_charge_virale_vih, 
 	dcv.résultat_brut_charge_virale_vih, 
-	dcv.résultat_seuil_charge_virale_vih, 
+	CASE WHEN dcv.résultat_brut_charge_virale_vih >= 1000 THEN 'Plus de 1000 copies/mL' WHEN dcv.résultat_brut_charge_virale_vih < 1000 THEN 'Moins de 1000 copies/mL' ELSE NULL END AS résultat_seuil_charge_virale_vih, 
 	dpa.date_dernière_pression_artérielle,
 	dpa.dernière_pression_artérielle_systolique,
 	dpa.dernière_pression_artérielle_diastolique,
