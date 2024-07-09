@@ -144,18 +144,18 @@ dernière_cd4 AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion, 
 		svil.date_cd4, 
-		svil.résultat_brut_cd4,
+		svil.raw_cd4_result_65 AS résultat_brut_cd4,
 		svil.résultat_seuil_cd4_cellules_ml
 	FROM cohorte c 
 	LEFT OUTER JOIN (SELECT 
 			patient_id, 
 			CASE WHEN date_de_prélèvement_cd4 IS NOT NULL THEN date_de_prélèvement_cd4 WHEN date_de_prélèvement_cd4 IS NULL THEN date_de_récéption_des_résultats_cd4 ELSE NULL END AS date_cd4, 
-			_résultat_brut_cd4 AS résultat_brut_cd4,
+			raw_cd4_result_65,
 			résultat_seuil_cd4_cellules_ml
 		FROM signes_vitaux_et_informations_laboratoire
-		WHERE (date_de_prélèvement_cd4 IS NOT NULL OR date_de_récéption_des_résultats_cd4 IS NOT NULL) AND _résultat_brut_cd4 IS NOT NULL) svil 
+		WHERE (date_de_prélèvement_cd4 IS NOT NULL OR date_de_récéption_des_résultats_cd4 IS NOT NULL) AND raw_cd4_result_65 IS NOT NULL) svil 
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_cd4::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_cd4::date
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4, résultat_brut_cd4, résultat_seuil_cd4_cellules_ml
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4, raw_cd4_result_65, résultat_seuil_cd4_cellules_ml
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4 DESC),
 -- The last viral load CTE provides the last viral load result and date per patient. Only tests with both a date and result are included. If the prélèvement date is completed, then this data is reported. If no pélèvement date is completed, then the récéption date is reported. 
 dernière_charge_virale_vih AS (
