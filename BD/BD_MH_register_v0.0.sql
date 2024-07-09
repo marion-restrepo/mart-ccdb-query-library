@@ -428,6 +428,7 @@ SELECT
 	pfuo.psychiatrist_fu_other_sessions,
 	COALESCE(pia.psychiatrist_initial_consultations,0) + COALESCE(pfui.psychiatrist_fu_individual_sessions,0) + COALESCE(pfuo.psychiatrist_fu_other_sessions,0) AS psychiatrist_sessions,
 	pfulc.psychiatrist_fu_light_contact_chw_sessions,
+	CASE WHEN pia.psychiatrist_initial_consultations IS NOT NULL THEN 'Yes' ELSE NULL END AS followed_by_psychiatrist,
 	pp.psychotropic_prescription
 FROM cohort c
 LEFT OUTER JOIN patient_identifier pi
