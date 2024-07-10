@@ -279,7 +279,8 @@ SELECT
 		WHEN lndx.mnt IS NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'VIH + TB'
 		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NULL THEN 'MNT + TB'
 		WHEN lndx.mnt IS NOT NULL AND lndx.tb IS NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'MNT + Santé mentale'
-		WHEN lndx.mnt IS NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'TB + Santé mentale'  
+		WHEN lndx.mnt IS NULL AND lndx.tb IS NOT NULL AND lndx.vih IS NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'TB + Santé mentale'
+		WHEN lndx.mnt IS NULL AND lndx.tb IS NULL AND lndx.vih IS NOT NULL AND lndx.troubles_de_santé_mentale IS NOT NULL THEN 'VIH + Santé mentale'  
 	ELSE NULL END AS cohorte,
 	lndx.asthme::date,
 	lndx.drépanocytose,
