@@ -112,16 +112,27 @@ instauration_arv AS (
 	WHERE mvt.date_d_instauration_des_arv IS NOT NULL
 	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date, mvt.date_d_instauration_des_arv
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date ASC),
+-- The ARV initiation CTE provides the ARV initiation date reported in the MNT VIH TB form. The firt date of ARV initiation is reported. 
+traitement_arv AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion,
+		mvt.traitement_arv
+	FROM cohorte c
+	LEFT OUTER JOIN mnt_vih_tb mvt
+		ON c.patient_id = mvt.patient_id AND c.date_inclusion <= mvt.date::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= mvt.date::date
+	WHERE mvt.traitement_arv IS NOT NULL
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date, mvt.traitement_arv
+	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mvt.date DESC),
 -- The ARV medication CTE reports if a patient has an active perscription for an ARV medication. Medications are only considered to be active if the calculated end date is after the current date and the stopped date is null.
 médicament_arv AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion,
-		CASE WHEN mdd.patient_id IS NOT NULL THEN 'Oui' ELSE NULL END AS traitement_arv_actuellement
+		CASE WHEN mdd.patient_id IS NOT NULL THEN 'Oui' ELSE NULL END AS traitement_arv_actuellement, STRING_AGG(mdd.coded_drug_name, ', ') AS liste_arv
 	FROM cohorte c 
 	LEFT OUTER JOIN medication_data_default mdd
 		ON c.patient_id = mdd.patient_id AND c.date_inclusion <= mdd.start_date::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= mdd.start_date::date
 	WHERE mdd.coded_drug_name IN ('ABC 120 mg / 3TC 60 mg, disp. tab.','ABC 600 mg / 3TC 300 mg, tab.','ATV 300 mg / r 100 mg, tab.','AZT 60 mg / 3TC 30 mg , disp. tab.','DARUNAVIR ethanolate (DRV), eq. 600 mg base, tab.','DOLUTEGRAVIR sodium (DTG), eq. 10mg base, disp. tab.','DOLUTEGRAVIR sodium (DTG), eq. 50 mg base, tab.','DORALPVR1P- LPV 40 mg / r 10 mg, granules dans gélule','LPV 200mg / r 50mg, tab.','TDF 300 mg / FTC 200 mg / DTG 50 mg, tab.','TDF 300 mg / FTC 200 mg, tab.','TDF 300mg / 3TC 300mg / DTG 50mg, tab.') AND mdd.calculated_end_date > CURRENT_DATE AND mdd.date_stopped IS NULL
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mdd.patient_id
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mdd.patient_id, mdd.coded_drug_name
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie),
 -- The last HIV CTE provides the last HIV test result and date per patient, both routine and confirmation test are considered. Only tests with both a date and result are included. If a confirmation test result is present then it is reported, if a confirmation test result is not present then the routine test result is reported. 
 dernière_test_vih AS (
@@ -298,6 +309,7 @@ SELECT
 	lndx.tb_pulmonaire,
 	lndx.tb_extrapulmonaire,
 	lndx.vih,
+	CASE WHEN lndx.vih IS NOT NULL THEN 'Oui' ELSE NULL END AS vih_filtre,
 	lndx.troubles_de_santé_mentale,
 	lndx.autre_diagnostic,
 	lndl.liste_diagnostic,
@@ -307,7 +319,9 @@ SELECT
 	frp.consommation_alcool,
 	frp.autre_facteurs_risque,
 	iarv.date_instauration_arv,
+	tarv.traitement_arv,
 	marv.traitement_arv_actuellement,
+	marv.liste_arv,
 	dtv.date_test_vih,
 	dtv.test_vih,
 	dc.date_cd4, 
@@ -344,6 +358,8 @@ LEFT OUTER JOIN facteurs_risque_pivot frp
 	ON c.encounter_id_inclusion = frp.encounter_id_inclusion
 LEFT OUTER JOIN instauration_arv iarv 
 	ON c.encounter_id_inclusion = iarv.encounter_id_inclusion
+LEFT OUTER JOIN traitement_arv tarv 
+	ON c.encounter_id_inclusion = tarv.encounter_id_inclusion
 LEFT OUTER JOIN médicament_arv marv 
 	ON c.encounter_id_inclusion = marv.encounter_id_inclusion
 LEFT OUTER JOIN dernière_test_vih dtv
