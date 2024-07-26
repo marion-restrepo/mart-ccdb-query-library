@@ -223,23 +223,7 @@ comorbidités_cohorte AS (
 comorbidités_cohorte_liste AS (
 	SELECT encounter_id_inclusion, STRING_AGG(comorbidités, ', ') AS liste_comorbidities
 	FROM comorbidités_cohorte
-	GROUP BY encounter_id_inclusion),
--- The last HIV CTE provides the last HIV test result and date per patient, both routine and confirmation test are considered. Only tests with both a date and result are included. If a confirmation test result is present then it is reported, if a confirmation test result is not present then the routine test result is reported. 
-dernière_test_vih AS (
-	SELECT
-		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion, 
-		svil.date_test_vih,
-		svil.test_vih 
-	FROM cohorte c 
-	LEFT OUTER JOIN (SELECT 
-			patient_id, 
-			CASE WHEN date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL THEN date_de_test_vih_de_confirmation WHEN (date_de_test_vih_de_confirmation IS NULL OR test_vih_de_confirmation IS NULL) AND date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL THEN date_de_test_vih_de_routine ELSE NULL END AS date_test_vih, 
-			CASE WHEN date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL THEN test_vih_de_confirmation WHEN (date_de_test_vih_de_confirmation IS NULL OR test_vih_de_confirmation IS NULL) AND date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL THEN test_vih_de_routine ELSE NULL END AS test_vih 
-		FROM signes_vitaux_et_informations_laboratoire
-		WHERE (date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL) OR (date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL)) svil 
-		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_test_vih::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_test_vih::date
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date_test_vih, svil.test_vih 
-	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date_test_vih DESC),	
+	GROUP BY encounter_id_inclusion)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
