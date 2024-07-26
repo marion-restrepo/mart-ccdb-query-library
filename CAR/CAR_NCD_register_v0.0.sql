@@ -126,14 +126,17 @@ traitement_arv AS (
 -- The ARV medication CTE reports if a patient has an active perscription for an ARV medication. Medications are only considered to be active if the calculated end date is after the current date and the stopped date is null.
 médicament_arv AS (
 	SELECT
-		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion,
-		CASE WHEN mdd.patient_id IS NOT NULL THEN 'Oui' ELSE NULL END AS traitement_arv_actuellement, STRING_AGG(mdd.coded_drug_name, ', ') AS liste_arv
+		c.patient_id, c.encounter_id_inclusion, mdd.coded_drug_name
 	FROM cohorte c 
 	LEFT OUTER JOIN medication_data_default mdd
 		ON c.patient_id = mdd.patient_id AND c.date_inclusion <= mdd.start_date::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= mdd.start_date::date
-	WHERE mdd.coded_drug_name IN ('ABC 120 mg / 3TC 60 mg, disp. tab.','ABC 600 mg / 3TC 300 mg, tab.','ATV 300 mg / r 100 mg, tab.','AZT 60 mg / 3TC 30 mg , disp. tab.','DARUNAVIR ethanolate (DRV), eq. 600 mg base, tab.','DOLUTEGRAVIR sodium (DTG), eq. 10mg base, disp. tab.','DOLUTEGRAVIR sodium (DTG), eq. 50 mg base, tab.','DORALPVR1P- LPV 40 mg / r 10 mg, granules dans gélule','LPV 200mg / r 50mg, tab.','TDF 300 mg / FTC 200 mg / DTG 50 mg, tab.','TDF 300 mg / FTC 200 mg, tab.','TDF 300mg / 3TC 300mg / DTG 50mg, tab.') AND mdd.calculated_end_date > CURRENT_DATE AND mdd.date_stopped IS NULL
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, mdd.patient_id, mdd.coded_drug_name
-	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie),
+	WHERE mdd.coded_drug_name IN ('ABC 120 mg / 3TC 60 mg, disp. tab.','ABC 600 mg / 3TC 300 mg, tab.','ATV 300 mg / r 100 mg, tab.','AZT 60 mg / 3TC 30 mg , disp. tab.','DARUNAVIR ethanolate (DRV), eq. 600 mg base, tab.','DOLUTEGRAVIR sodium (DTG), eq. 10mg base, disp. tab.','DOLUTEGRAVIR sodium (DTG), eq. 50 mg base, tab.','DORALPVR1P- LPV 40 mg / r 10 mg, granules dans gélule','LPV 200mg / r 50mg, tab.','TDF 300 mg / FTC 200 mg / DTG 50 mg, tab.','TDF 300 mg / FTC 200 mg, tab.','TDF 300mg / 3TC 300mg / DTG 50mg, tab.') AND mdd.calculated_end_date > CURRENT_DATE AND mdd.date_stopped IS NULL),
+médicament_arv_list AS (
+	SELECT
+		encounter_id_inclusion,
+		STRING_AGG(coded_drug_name, ', ') AS liste_arv
+	FROM médicament_arv
+	GROUP BY encounter_id_inclusion),
 -- The last HIV CTE provides the last HIV test result and date per patient, both routine and confirmation test are considered. Only tests with both a date and result are included. If a confirmation test result is present then it is reported, if a confirmation test result is not present then the routine test result is reported. 
 dernière_test_vih AS (
 	SELECT
@@ -208,7 +211,35 @@ dernère_imc AS (
 	LEFT OUTER JOIN signes_vitaux_et_informations_laboratoire svil
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= svil.date::date
 	WHERE svil.date IS NOT NULL AND svil.indice_de_masse_corporelle IS NOT NULL
-	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date DESC)
+	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date DESC),
+-- The comorbidités CTE selects all reported comorbidities per cohort enrollment, listing the data horizonally.
+comorbidités_cohorte AS (
+	SELECT
+		DISTINCT ON (cm.patient_id, cm.comorbidités) cm.patient_id, c.encounter_id_inclusion, n.date, cm.comorbidités
+	FROM comorbidités cm 
+	LEFT JOIN mnt_vih_tb n USING(encounter_id)
+	LEFT JOIN cohorte c ON cm.patient_id = c.patient_id AND c.date_inclusion <= n.date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE current_date END >= n.date
+	ORDER BY cm.patient_id, cm.comorbidités, n.date),
+comorbidités_cohorte_liste AS (
+	SELECT encounter_id_inclusion, STRING_AGG(comorbidités, ', ') AS liste_comorbidities
+	FROM comorbidités_cohorte
+	GROUP BY encounter_id_inclusion),
+-- The last HIV CTE provides the last HIV test result and date per patient, both routine and confirmation test are considered. Only tests with both a date and result are included. If a confirmation test result is present then it is reported, if a confirmation test result is not present then the routine test result is reported. 
+dernière_test_vih AS (
+	SELECT
+		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion, 
+		svil.date_test_vih,
+		svil.test_vih 
+	FROM cohorte c 
+	LEFT OUTER JOIN (SELECT 
+			patient_id, 
+			CASE WHEN date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL THEN date_de_test_vih_de_confirmation WHEN (date_de_test_vih_de_confirmation IS NULL OR test_vih_de_confirmation IS NULL) AND date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL THEN date_de_test_vih_de_routine ELSE NULL END AS date_test_vih, 
+			CASE WHEN date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL THEN test_vih_de_confirmation WHEN (date_de_test_vih_de_confirmation IS NULL OR test_vih_de_confirmation IS NULL) AND date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL THEN test_vih_de_routine ELSE NULL END AS test_vih 
+		FROM signes_vitaux_et_informations_laboratoire
+		WHERE (date_de_test_vih_de_confirmation IS NOT NULL AND test_vih_de_confirmation IS NOT NULL) OR (date_de_test_vih_de_routine IS NOT NULL AND test_vih_de_routine IS NOT NULL)) svil 
+		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_test_vih::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_test_vih::date
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date_test_vih, svil.test_vih 
+	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, svil.date_test_vih DESC),	
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -313,15 +344,18 @@ SELECT
 	lndx.troubles_de_santé_mentale,
 	lndx.autre_diagnostic,
 	lndl.liste_diagnostic,
+	cmcl.liste_comorbidities,
 	frp.médecine_traditionnelle,
 	frp.tabagisme_passif,
 	frp.fumeur,
 	frp.consommation_alcool,
 	frp.autre_facteurs_risque,
 	iarv.date_instauration_arv,
-	tarv.traitement_arv,
-	marv.traitement_arv_actuellement,
+	tarv.traitement_arv AS traitement_arv_fiche,
+	CASE WHEN marv.liste_arv IS NOT NULL THEN 'Oui' ELSE NULL END AS traitement_arv_actuellement,
 	marv.liste_arv,
+	CASE WHEN (lndx.tb_pulmonaire IS NULL AND lndx.tb_extrapulmonaire IS NULL) AND ((marv.liste_arv LIKE '%TDF 300mg / 3TC 300mg / DTG 50mg, tab.%') OR ((marv.liste_arv LIKE '%ABC %' OR marv.liste_arv LIKE '%AZT 60 mg%') AND marv.liste_arv LIKE '%DOLUTEGRAVIR sodium (DTG)%')) THEN 'TAR de première ligne' WHEN (lndx.tb_pulmonaire IS NOT NULL OR lndx.tb_extrapulmonaire IS NOT NULL) AND marv.liste_arv LIKE '%TDF 300mg / 3TC 300mg / DTG 50mg, tab.%' AND marv.liste_arv LIKE '%DOLUTEGRAVIR sodium (DTG)%' THEN 'TAR de première ligne'
+	ELSE NULL END AS traitement_arv_médicaments,
 	dtv.date_test_vih,
 	dtv.test_vih,
 	dc.date_cd4, 
@@ -354,13 +388,15 @@ LEFT OUTER JOIN diagnostic_cohorte_pivot lndx
 	ON c.encounter_id_inclusion = lndx.encounter_id_inclusion
 LEFT OUTER JOIN diagnostic_cohorte_liste lndl
 	ON c.encounter_id_inclusion = lndl.encounter_id_inclusion
+LEFT OUTER JOIN comorbidités_cohorte_liste cmcl 
+	ON c.encounter_id_inclusion = cmcl.encounter_id_inclusion
 LEFT OUTER JOIN facteurs_risque_pivot frp 
 	ON c.encounter_id_inclusion = frp.encounter_id_inclusion
 LEFT OUTER JOIN instauration_arv iarv 
 	ON c.encounter_id_inclusion = iarv.encounter_id_inclusion
 LEFT OUTER JOIN traitement_arv tarv 
 	ON c.encounter_id_inclusion = tarv.encounter_id_inclusion
-LEFT OUTER JOIN médicament_arv marv 
+LEFT OUTER JOIN médicament_arv_list marv 
 	ON c.encounter_id_inclusion = marv.encounter_id_inclusion
 LEFT OUTER JOIN dernière_test_vih dtv
 	ON c.encounter_id_inclusion = dtv.encounter_id_inclusion
