@@ -100,4 +100,5 @@ LEFT OUTER JOIN person_details_default pdd
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.initial_encounter_id = ped.encounter_id
 LEFT OUTER JOIN last_visit_location lvl
-	ON c.initial_encounter_id = lvl.initial_encounter_id;
+	ON c.initial_encounter_id = lvl.initial_encounter_id
+WHERE c.patient_id IS NOT NULL;
