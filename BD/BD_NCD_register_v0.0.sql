@@ -77,9 +77,8 @@ cohort_diagnosis AS (
 	ORDER BY d.patient_id, d.ncdiagnosis, n.date),
 ncd_diagnosis_pivot AS (
 	SELECT 
-		DISTINCT ON (initial_encounter_id, patient_id, date) initial_encounter_id, 
-		patient_id, 
-		date,
+		DISTINCT ON (initial_encounter_id, patient_id) initial_encounter_id, 
+		patient_id,
 		MAX (CASE WHEN diagnosis = 'Asthma' THEN 1 ELSE NULL END) AS asthma,
 		MAX (CASE WHEN diagnosis = 'Chronic kidney disease' THEN 1 ELSE NULL END) AS chronic_kidney_disease,
 		MAX (CASE WHEN diagnosis = 'Cardiovascular disease' THEN 1 ELSE NULL END) AS cardiovascular_disease,
@@ -94,7 +93,7 @@ ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
 	FROM cohort_diagnosis
-	GROUP BY initial_encounter_id, patient_id, date),
+	GROUP BY initial_encounter_id, patient_id),
 ncd_diagnosis_list AS (
 	SELECT initial_encounter_id, STRING_AGG(diagnosis, ', ') AS diagnosis_list
 	FROM cohort_diagnosis
