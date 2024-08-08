@@ -12,14 +12,11 @@ cohort AS (
 -- The NCD diagnosis CTE select the last reported NCD diagnosis per cohort enrollment. 
 cohort_diagnosis AS (
 	SELECT
-		d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+		DISTINCT ON (d.patient_id, d.ncdiagnosis) d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
 	FROM ncdiagnosis d 
 	LEFT JOIN ncd n USING(encounter_id)
-	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date),
-last_cohort_diagnosis AS (
-	SELECT cd.patient_id, cd.initial_encounter_id, cd.date, cd.diagnosis
-	FROM cohort_diagnosis cd
-	INNER JOIN (SELECT initial_encounter_id, MAX(date) AS max_date FROM cohort_diagnosis GROUP BY initial_encounter_id) cd2 ON cd.initial_encounter_id = cd2.initial_encounter_id AND cd.date = cd2.max_date),
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date
+	ORDER BY d.patient_id, d.ncdiagnosis, n.date),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
 last_form_location AS (	
 	SELECT 
@@ -89,10 +86,11 @@ SELECT
 	lvl.last_visit_location,
 	c.discharge_date,
 	c.patient_outcome,
-	lcd.diagnosis
-FROM last_cohort_diagnosis lcd
+	cd.diagnosis,
+	cd.date AS diagnosis_date
+FROM cohort_diagnosis cd
 LEFT OUTER JOIN cohort c
-	ON lcd.initial_encounter_id = c.initial_encounter_id
+	ON cd.initial_encounter_id = c.initial_encounter_id
 LEFT OUTER JOIN patient_identifier pi
 	ON c.patient_id = pi.patient_id
 LEFT OUTER JOIN person_attributes pa

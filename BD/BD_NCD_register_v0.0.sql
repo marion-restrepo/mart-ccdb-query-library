@@ -70,15 +70,12 @@ last_appointments AS (
 -- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
 cohort_diagnosis AS (
 	SELECT
-		d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+		DISTINCT ON (d.patient_id, d.ncdiagnosis) d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
 	FROM ncdiagnosis d 
 	LEFT JOIN ncd n USING(encounter_id)
-	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date),
-last_cohort_diagnosis AS (
-	SELECT cd.patient_id, cd.initial_encounter_id, cd.date, cd.diagnosis
-	FROM cohort_diagnosis cd
-	INNER JOIN (SELECT initial_encounter_id, MAX(date) AS max_date FROM cohort_diagnosis GROUP BY initial_encounter_id) cd2 ON cd.initial_encounter_id = cd2.initial_encounter_id AND cd.date = cd2.max_date),
-last_ncd_diagnosis_pivot AS (
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date
+	ORDER BY d.patient_id, d.ncdiagnosis, n.date),
+ncd_diagnosis_pivot AS (
 	SELECT 
 		DISTINCT ON (initial_encounter_id, patient_id, date) initial_encounter_id, 
 		patient_id, 
@@ -96,11 +93,11 @@ last_ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
-	FROM last_cohort_diagnosis
+	FROM cohort_diagnosis
 	GROUP BY initial_encounter_id, patient_id, date),
-last_ncd_diagnosis_list AS (
+ncd_diagnosis_list AS (
 	SELECT initial_encounter_id, STRING_AGG(diagnosis, ', ') AS diagnosis_list
-	FROM last_cohort_diagnosis
+	FROM cohort_diagnosis
 	GROUP BY initial_encounter_id),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
 ncd_risk_factors_pivot AS (
@@ -384,6 +381,21 @@ last_urine_protein AS (
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
 		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.urine_protein IS NOT NULL
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+-- The last HIV test CTE extracts the last HIV test result reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
+last_hiv AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+		c.initial_encounter_id,
+		c.initial_visit_date, 
+		c.discharge_encounter_id,
+		c.discharge_date, 
+		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_hiv_date, 
+		vli.hiv_test AS last_hiv
+	FROM cohort c
+	LEFT OUTER JOIN vitals_and_laboratory_information vli
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hiv_test IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC)
 -- Main query --
 SELECT
@@ -480,21 +492,23 @@ SELECT
 	lc.last_creatinine_date,	
 	lup.last_urine_protein,
 	lup.last_urine_protein_date,
-	lndx.asthma,
-	lndx.chronic_kidney_disease,
-	lndx.cardiovascular_disease,
-	lndx.copd,
-	lndx.diabetes_type1,
-	lndx.diabetes_type2,
-	CASE WHEN lndx.diabetes_type1 IS NOT NULL OR lndx.diabetes_type2 IS NOT NULL THEN 1 END AS diabetes_any,
-	lndx.hypertension,
-	lndx.hypothyroidism,
-	lndx.hyperthyroidism,		
-	lndx.focal_epilepsy,
-	lndx.generalised_epilepsy,
-	lndx.unclassified_epilepsy,
-	lndx.other_ncd,
-	lndl.diagnosis_list,
+	lh.last_hiv,
+	lh.last_hiv_date,
+	ndx.asthma,
+	ndx.chronic_kidney_disease,
+	ndx.cardiovascular_disease,
+	ndx.copd,
+	ndx.diabetes_type1,
+	ndx.diabetes_type2,
+	CASE WHEN ndx.diabetes_type1 IS NOT NULL OR ndx.diabetes_type2 IS NOT NULL THEN 1 END AS diabetes_any,
+	ndx.hypertension,
+	ndx.hypothyroidism,
+	ndx.hyperthyroidism,		
+	ndx.focal_epilepsy,
+	ndx.generalised_epilepsy,
+	ndx.unclassified_epilepsy,
+	ndx.other_ncd,
+	ndl.diagnosis_list,
 	lrf.occupational_exposure,
 	lrf.traditional_medicine,
 	lrf.secondhand_smoking,
@@ -520,10 +534,10 @@ LEFT OUTER JOIN patient_encounter_details_default ped
 	ON c.initial_encounter_id = ped.encounter_id
 LEFT OUTER JOIN last_appointments la
 	ON c.initial_encounter_id = la.initial_encounter_id
-LEFT OUTER JOIN last_ncd_diagnosis_pivot lndx
-	ON c.initial_encounter_id = lndx.initial_encounter_id
-LEFT OUTER JOIN last_ncd_diagnosis_list lndl
-	ON c.initial_encounter_id = lndl.initial_encounter_id
+LEFT OUTER JOIN ncd_diagnosis_pivot ndx
+	ON c.initial_encounter_id = ndx.initial_encounter_id
+LEFT OUTER JOIN ncd_diagnosis_list ndl
+	ON c.initial_encounter_id = ndl.initial_encounter_id
 LEFT OUTER JOIN last_risk_factors lrf
 	ON c.initial_encounter_id = lrf.initial_encounter_id
 LEFT OUTER JOIN last_epilepsy_history leh
@@ -554,5 +568,7 @@ LEFT OUTER JOIN last_creatinine lc
 	ON c.initial_encounter_id = lc.initial_encounter_id
 LEFT OUTER JOIN last_urine_protein lup
 	ON c.initial_encounter_id = lup.initial_encounter_id
+LEFT OUTER JOIN last_hiv lh
+	ON c.initial_encounter_id = lh.initial_encounter_id
 LEFT OUTER JOIN last_form_location lfl
 	ON c.initial_encounter_id = lfl.initial_encounter_id;
