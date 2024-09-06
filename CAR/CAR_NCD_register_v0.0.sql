@@ -59,6 +59,7 @@ diagnostic_cohorte_pivot AS (
 		MAX (CASE WHEN diagnostic = 'Asthme' THEN date::date ELSE NULL END) AS asthme,
 		MAX (CASE WHEN diagnostic = 'Drépanocytose' THEN date::date ELSE NULL END) AS drépanocytose,
 		MAX (CASE WHEN diagnostic = 'Insuffisance renale chronique' THEN date::date ELSE NULL END) AS insuffisance_renal_chronique,
+		MAX (CASE WHEN diagnostic = 'Syndrome néphrotique' THEN date::date ELSE NULL END) AS syndrome_néphrotique,
 		MAX (CASE WHEN diagnostic = 'Maladie cardiovasculaire' THEN date::date ELSE NULL END) AS maladie_cardiovasculaire,
 		MAX (CASE WHEN diagnostic = 'Bronchopneumopathie chronique obstructive' THEN date::date ELSE NULL END) AS bronchopneumopathie_chronique_obstructive,
 		MAX (CASE WHEN diagnostic = 'Diabète sucré de type 1' THEN date::date ELSE NULL END) AS diabète_type1,
@@ -72,9 +73,11 @@ diagnostic_cohorte_pivot AS (
 		MAX (CASE WHEN diagnostic = 'Tuberculose pulmonaire' THEN date::date ELSE NULL END) AS tb_pulmonaire,
 		MAX (CASE WHEN diagnostic = 'Tuberculose extrapulmonaire' THEN date::date ELSE NULL END) AS tb_extrapulmonaire,
 		MAX (CASE WHEN diagnostic = 'Infection par le VIH' THEN date::date ELSE NULL END) AS vih,
+		MAX (CASE WHEN diagnostic LIKE '%hépatite B' THEN date::date ELSE NULL END) AS infection_hep_b,
+		MAX (CASE WHEN diagnostic LIKE '%hépatite C' THEN date::date ELSE NULL END) AS infection_hep_c,
 		MAX (CASE WHEN diagnostic = 'Troubles de santé mentale' THEN date::date ELSE NULL END) AS troubles_de_santé_mentale,
 		MAX (CASE WHEN diagnostic = 'Autre' THEN date::date ELSE NULL END) AS autre_diagnostic,
-		MAX (CASE WHEN diagnostic IN ('Asthme','Drépanocytose','Insuffisance renale chronique','Maladie cardiovasculaire','Bronchopneumopathie chronique obstructive','Diabète sucré de type 1','Diabète sucré de type 2','Hypertension','Hypothyroïdie','Hyperthyroïdie','Épilepsie focale','Épilepsie généralisée','Épilepsie non classifiée','Autre') THEN 'Oui' ELSE NULL END) AS mnt,
+		MAX (CASE WHEN diagnostic IN ('Asthme','Drépanocytose','Insuffisance renale chronique','Syndrome néphrotique','Maladie cardiovasculaire','Bronchopneumopathie chronique obstructive','Diabète sucré de type 1','Diabète sucré de type 2','Hypertension','Hypothyroïdie','Hyperthyroïdie','Épilepsie focale','Épilepsie généralisée','Épilepsie non classifiée','Autre') THEN 'Oui' ELSE NULL END) AS mnt,
 		MAX (CASE WHEN diagnostic IN ('Tuberculose pulmonaire','Tuberculose extrapulmonaire') THEN 'Oui' ELSE NULL END) AS tb		
 	FROM diagnostic_cohorte
 	GROUP BY encounter_id_inclusion, patient_id),
@@ -158,36 +161,32 @@ dernière_cd4 AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion, 
 		svil.date_cd4, 
-		svil.raw_cd4_result_65 AS résultat_brut_cd4,
-		svil.résultat_seuil_cd4_cellules_ml
+		svil.résultat_brut_cd4
 	FROM cohorte c 
 	LEFT OUTER JOIN (SELECT 
 			patient_id, 
 			CASE WHEN date_de_prélèvement_cd4 IS NOT NULL THEN date_de_prélèvement_cd4 WHEN date_de_prélèvement_cd4 IS NULL THEN date_de_récéption_des_résultats_cd4 ELSE NULL END AS date_cd4, 
-			raw_cd4_result_65,
-			résultat_seuil_cd4_cellules_ml
-		FROM signes_vitaux_et_informations_laboratoire
-		WHERE (date_de_prélèvement_cd4 IS NOT NULL OR date_de_récéption_des_résultats_cd4 IS NOT NULL) AND raw_cd4_result_65 IS NOT NULL) svil 
+			résultat_brut_cd4
+		FROM signes_vitaux_et_informations_laboratoire_cd4
+		WHERE résultat_brut_cd4 IS NOT NULL) svil 
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_cd4::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_cd4::date
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4, raw_cd4_result_65, résultat_seuil_cd4_cellules_ml
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4, résultat_brut_cd4
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4 DESC),
 -- The last viral load CTE provides the last viral load result and date per patient. Only tests with both a date and result are included. If the prélèvement date is completed, then this data is reported. If no pélèvement date is completed, then the récéption date is reported. 
 dernière_charge_virale_vih AS (
 	SELECT
 		DISTINCT ON (c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie) c.encounter_id_inclusion, 
 		svil.date_charge_virale_vih, 
-		svil.résultat_brut_charge_virale_vih, 
-		svil.résultat_seuil_charge_virale_vih
+		svil.résultat_brut_charge_virale_vih
 	FROM cohorte c 
 	LEFT OUTER JOIN (SELECT 
 			patient_id, 
 			CASE WHEN date_de_prélèvement_charge_virale_vih IS NOT NULL THEN date_de_prélèvement_charge_virale_vih WHEN date_de_prélèvement_charge_virale_vih IS NULL THEN date_de_réception_des_résultats_charge_virale_vih ELSE NULL END AS date_charge_virale_vih, 
-			résultat_brut_charge_virale_vih,
-			résultat_seuil_charge_virale_vih
-		FROM signes_vitaux_et_informations_laboratoire
-		WHERE (date_de_prélèvement_charge_virale_vih IS NOT NULL OR date_de_réception_des_résultats_charge_virale_vih IS NOT NULL) AND résultat_brut_charge_virale_vih IS NOT NULL) svil 
+			résultat_brut_charge_virale_vih
+		FROM signes_vitaux_et_informations_laboratoire_charge_virale_vih
+		WHERE résultat_brut_charge_virale_vih IS NOT NULL) svil 
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_charge_virale_vih::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_charge_virale_vih::date
-	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_charge_virale_vih, résultat_brut_charge_virale_vih, résultat_seuil_charge_virale_vih	
+	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_charge_virale_vih, résultat_brut_charge_virale_vih
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_charge_virale_vih DESC),
 -- The last blood pressure CTE extracts the last complete blood pressure measurements reported per cohort enrollment. Only blood pressures with a date, systolic, and diastolic information are reported.
 dernière_pression_artérielle AS (
@@ -311,6 +310,7 @@ SELECT
 	lndx.asthme::date,
 	lndx.drépanocytose,
 	lndx.insuffisance_renal_chronique,
+	lndx.syndrome_néphrotique,
 	lndx.maladie_cardiovasculaire,
 	lndx.bronchopneumopathie_chronique_obstructive,
 	lndx.diabète_type1,
@@ -325,6 +325,10 @@ SELECT
 	lndx.tb_extrapulmonaire,
 	lndx.vih,
 	CASE WHEN lndx.vih IS NOT NULL THEN 'Oui' ELSE NULL END AS vih_filtre,
+	lndx.infection_hep_b,
+	CASE WHEN lndx.infection_hep_b IS NOT NULL THEN 'Oui' ELSE NULL END AS infection_hep_b_filtre,
+	lndx.infection_hep_c,
+	CASE WHEN lndx.infection_hep_c IS NOT NULL THEN 'Oui' ELSE NULL END AS infection_hep_c_filtre,
 	lndx.troubles_de_santé_mentale,
 	lndx.autre_diagnostic,
 	lndl.liste_diagnostic,
