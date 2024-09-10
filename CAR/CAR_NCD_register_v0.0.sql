@@ -168,7 +168,15 @@ dernière_cd4 AS (
 			CASE WHEN date_de_prélèvement_cd4 IS NOT NULL THEN date_de_prélèvement_cd4 WHEN date_de_prélèvement_cd4 IS NULL THEN date_de_récéption_des_résultats_cd4 ELSE NULL END AS date_cd4, 
 			résultat_brut_cd4
 		FROM signes_vitaux_et_informations_laboratoire_cd4
-		WHERE résultat_brut_cd4 IS NOT NULL) svil 
+		WHERE résultat_brut_cd4 IS NOT NULL AND encounter_id > 14375
+		UNION
+		SELECT
+			patient_id, 
+    		CASE WHEN MAX(date_de_prélèvement_cd4) IS NOT NULL THEN MAX(date_de_prélèvement_cd4) WHEN MAX(date_de_prélèvement_cd4) IS NULL THEN MAX(date_de_récéption_des_résultats_cd4) ELSE NULL END AS date_cd4, 
+    		MAX(résultat_brut_cd4)
+		FROM signes_vitaux_et_informations_laboratoire_cd4
+		WHERE  encounter_id <= 14375
+		GROUP BY encounter_id, patient_id) svil 
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_cd4::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_cd4::date
 	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4, résultat_brut_cd4
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_cd4 DESC),
@@ -184,7 +192,15 @@ dernière_charge_virale_vih AS (
 			CASE WHEN date_de_prélèvement_charge_virale_vih IS NOT NULL THEN date_de_prélèvement_charge_virale_vih WHEN date_de_prélèvement_charge_virale_vih IS NULL THEN date_de_réception_des_résultats_charge_virale_vih ELSE NULL END AS date_charge_virale_vih, 
 			résultat_brut_charge_virale_vih
 		FROM signes_vitaux_et_informations_laboratoire_charge_virale_vih
-		WHERE résultat_brut_charge_virale_vih IS NOT NULL) svil 
+		WHERE résultat_brut_charge_virale_vih IS NOT NULL AND encounter_id > 14371
+		UNION
+		SELECT
+			patient_id, 
+    		CASE WHEN MAX(date_de_prélèvement_charge_virale_vih) IS NOT NULL THEN MAX(date_de_prélèvement_charge_virale_vih) WHEN MAX(date_de_prélèvement_charge_virale_vih) IS NULL THEN MAX(date_de_réception_des_résultats_charge_virale_vih) ELSE NULL END AS date_charge_virale_vih, 
+    		MAX(résultat_brut_charge_virale_vih) AS résultat_brut_charge_virale_vih
+		FROM signes_vitaux_et_informations_laboratoire_charge_virale_vih
+		WHERE  encounter_id <= 14371
+		GROUP BY encounter_id, patient_id) svil 
 		ON c.patient_id = svil.patient_id AND c.date_inclusion <= svil.date_charge_virale_vih::date AND CASE WHEN c.date_de_sortie IS NOT NULL THEN c.date_de_sortie ELSE CURRENT_DATE END >= svil.date_charge_virale_vih::date
 	GROUP BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_charge_virale_vih, résultat_brut_charge_virale_vih
 	ORDER BY c.patient_id, c.encounter_id_inclusion, c.date_inclusion, c.date_de_sortie, date_charge_virale_vih DESC),
