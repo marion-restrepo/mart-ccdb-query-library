@@ -5,10 +5,36 @@ WITH initial AS (
 	FROM hepatitis_c WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome, d.hcv_pcr_12_weeks_after_treatment_end, d.date_test_completed, d.result_return_date
-	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome, hcv_pcr_12_weeks_after_treatment_end, date_test_completed, result_return_date FROM hepatitis_c WHERE visit_type = 'Discharge visit') d 
-		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
+		i1.patient_id, i1.initial_encounter_id, i1.initial_visit_location, i1.initial_visit_date, CASE WHEN i1.initial_visit_order > 1 THEN 'Yes' END readmission, CASE WHEN i2.initial_visit_date IS NOT NULL THEN i2.initial_visit_date WHEN i2.initial_visit_date IS NULL THEN CURRENT_DATE ELSE NULL END AS end_date
+	FROM initial i1
+	LEFT OUTER JOIN initial i2
+		ON i1.patient_id = i2.patient_id AND  i1.initial_visit_order = (i2.initial_visit_order - 1)),
+treatment_failure AS (
+	SELECT 
+		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+		c.initial_encounter_id,
+		c.initial_visit_date, 
+		c.end_date, 
+		tf.date::date AS first_treatment_failure,
+		tf.hcv_pcr_12_weeks_after_treatment_end
+	FROM cohort c
+	LEFT OUTER JOIN hepatitis_c tf
+		ON c.patient_id = tf.patient_id AND c.initial_visit_date <= tf.date::date AND c.end_date >= tf.date::date
+	WHERE patient_outcome = 'Treatment failure'
+	ORDER BY c.patient_id, c.initial_encounter_id, tf.patient_id, tf.date::date ASC),
+last_discharge AS (
+	SELECT
+		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+		c.initial_encounter_id,
+		c.initial_visit_date, 
+		c.end_date, 
+		d.patient_outcome,
+		d.hcv_pcr_12_weeks_after_treatment_end AS last_pcr_12w
+	FROM cohort c
+	LEFT OUTER JOIN hepatitis_c d 
+		ON c.patient_id = d.patient_id AND c.initial_visit_date <= d.date::date AND c.end_date >=d.date::date
+	WHERE d.visit_type = 'Discharge visit'
+	ORDER BY c.patient_id, c.initial_encounter_id, d.patient_id, d.date::date DESC),
 -- The last completed and missed appointment CTEs determine if a patient currently enrolled in the cohort has not attended their appointments.  
 last_completed_appointment AS (
 	SELECT
@@ -36,16 +62,17 @@ first_missed_appointment AS (
 		ORDER BY pa.patient_id, pa.appointment_start_time ASC),
 last_form AS (
 	SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
+		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date) c.initial_encounter_id,
 		nvsl.date AS last_form_date,
 		last_form_type AS last_form_type
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date 
-	ELSE date END AS date, visit_type AS last_form_type FROM hepatitis_c UNION SELECT patient_id, date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
-		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
-last_appointments AS (
+	LEFT OUTER JOIN (SELECT 
+			patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date ELSE date END AS date, visit_type AS last_form_type FROM hepatitis_c UNION SELECT patient_id, date, form_field_path AS last_form_type
+		FROM vitals_and_laboratory_information) nvsl
+			ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND c.end_date >= nvsl.date::date
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date, nvsl.date, nvsl.last_form_type
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date, nvsl.date DESC),
+last_visit AS (
 	SELECT
 		lca.patient_id,
 		c.initial_encounter_id,
@@ -62,19 +89,18 @@ last_appointments AS (
 		CASE WHEN fma.appointment_start_time IS NOT NULL THEN (DATE_PART('day',(now())-(fma.appointment_start_time::timestamp)))::int ELSE NULL END AS days_since_last_missed_appointment
 	FROM cohort c
 	LEFT OUTER JOIN last_completed_appointment lca 
-		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time
+		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND c.end_date >= lca.appointment_start_time
 	LEFT OUTER JOIN first_missed_appointment fma
-		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= fma.appointment_start_time
+		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND c.end_date >= fma.appointment_start_time
 	LEFT OUTER JOIN last_form lf
 		ON c.initial_encounter_id = lf.initial_encounter_id),		
 -- The last Hepatitis C visit CTE extracts the last visit data per cohort enrollment to look at if there are values reported for illicit drug use, pregnancy, hospitalisation, jaundice, hepatic encephalopathy, ascites, haematemesis, or cirrhosis repoted at the last visit. 
 last_hepc_visit AS (
-SELECT 
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
-		c.discharge_encounter_id,
-		c.discharge_date, 
+		c.end_date, 
 		hc.date::date AS last_med_visit_date,
 		hc.visit_type AS last_med_visit_type,
 		hc.illicit_drug_use AS drug_use_last_visit,
@@ -87,66 +113,70 @@ SELECT
 		hc.clinical_decompensated_cirrhosis AS cirrhosis_last_visit
 	FROM cohort c
 	LEFT OUTER JOIN hepatitis_c hc
-		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
+		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND c.end_date >= hc.date::date
 	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),	
 -- The hospitalised CTE checks there is a hospitlisation reported in visits taking place in the last 6 months. 
 hospitalisation_last_6m AS (
 	SELECT DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,	c.initial_encounter_id, COUNT(hc.hospitalised_since_last_visit) AS nb_hospitalised_last_6m, CASE WHEN hc.hospitalised_since_last_visit IS NOT NULL THEN 'Yes' ELSE 'No' END AS hospitalised_last_6m
 		FROM cohort c
 		LEFT OUTER JOIN hepatitis_c hc
-			ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
+			ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND c.end_date >= hc.date::date
 		WHERE hc.hospitalised_since_last_visit = 'Yes' and hc.date <= current_date and hc.date >= current_date - interval '6 months'
 		GROUP BY c.patient_id, c.initial_encounter_id, hc.hospitalised_since_last_visit),	
 -- The initial treatment CTE extracts treatment start data from the initial visit per cohort enrollment. If multiple initial visits have treatment initiation data, the most recent one is reported. 
-treatment_initial AS (
-SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
+treatment_order AS (
+	SELECT 
+		DISTINCT ON (hc.patient_id, c.initial_encounter_id, hc.treatment_start_date, hc.medication_duration, hepatitis_c_treatment_choice) hc.patient_id,
 		c.initial_encounter_id,
-		c.initial_visit_date, 
-		c.discharge_encounter_id,
-		c.discharge_date, 
 		hc.date::date,
-		hc.visit_type,
 		hc.treatment_start_date,
 		hc.medication_duration,
 		hc.hepatitis_c_treatment_choice,
-		hc.treatment_end_date
-	FROM cohort c
-	LEFT OUTER JOIN hepatitis_c hc
-		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
-	WHERE hc.treatment_start_date IS NOT NULL AND hc.visit_type = 'Initial visit'
-	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),
--- The follow-up treatment CTE extracts treatment start data from the initial visit per cohort enrollment. If multiple initial visits have treatment initiation data, the most recent one is reported. 
+		hc.treatment_end_date,
+		DENSE_RANK () OVER (PARTITION BY c.initial_encounter_id ORDER BY date) AS treatment_order
+	FROM hepatitis_c hc
+	LEFT OUTER JOIN cohort c
+		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND c.end_date >= hc.date::date
+	WHERE hc.treatment_start_date IS NOT NULL AND hc.medication_duration IS NOT NULL AND hc.hepatitis_c_treatment_choice IS NOT NULL
+	ORDER BY hc.patient_id, c.initial_encounter_id, hc.treatment_start_date, hc.medication_duration, hepatitis_c_treatment_choice, hc.date::date ASC),
 treatment_secondary AS (
-SELECT 
+		SELECT
+			DISTINCT ON (patient_id, initial_encounter_id) patient_id,
+			initial_encounter_id,
+			date::date,
+			treatment_start_date,
+			medication_duration,
+			hepatitis_c_treatment_choice,
+			treatment_end_date
+		FROM treatment_order
+		WHERE treatment_order > 1
+		ORDER BY patient_id, initial_encounter_id, treatment_order DESC),
+last_hiv AS (
+	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,
 		c.initial_encounter_id,
 		c.initial_visit_date, 
-		c.discharge_encounter_id,
-		c.discharge_date, 
-		hc.date::date,
-		hc.visit_type,
-		hc.treatment_start_date,
-		hc.medication_duration,
-		hc.hepatitis_c_treatment_choice,
-		hc.treatment_end_date
+		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_hiv_date, 
+		vli.hiv_test AS last_hiv
 	FROM cohort c
-	LEFT OUTER JOIN hepatitis_c hc
-		ON c.patient_id = hc.patient_id AND c.initial_visit_date <= hc.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= hc.date::date
-	WHERE hc.treatment_start_date IS NOT NULL AND hc.visit_type = 'Follow up visit'
-	ORDER BY c.patient_id, c.initial_encounter_id, hc.patient_id, hc.date::date DESC),
+	LEFT OUTER JOIN vitals_and_laboratory_information vli
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND c.end_date >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hiv_test IS NOT NULL
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
 -- The last visit location CTE finds the last visit location reported in Hepatitis C forms.
 last_form_location AS (	
 	SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
+		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date) c.initial_encounter_id,
 		nvsl.date AS last_form_date,
 		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM hepatitis_c UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
-		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	LEFT OUTER JOIN (SELECT 
+			patient_id, date, visit_location FROM hepatitis_c UNION SELECT patient_id, date, location_name AS visit_location 
+		FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND c.end_date >= nvsl.date::date
 	WHERE nvsl.visit_location IS NOT NULL
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC)
+	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date, nvsl.date, nvsl.visit_location
+	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.end_date, nvsl.date DESC)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -187,24 +217,21 @@ SELECT
 	pa."Personal_Situation",
 	pa."Living_conditions",
 	c.initial_visit_date AS enrollment_date,
-	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
 	c.readmission,
 	c.initial_visit_location,
 	lfl.last_form_location,
-	la.last_appointment_location,
-	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
-	la.last_form_date,
-	la.last_form_type,	
-	la.last_appointment_date,
-	la.last_appointment_service,
-	la.last_visit_date,
-	la.last_visit_type,
-	la.days_since_last_visit,
-	la.last_missed_appointment_date,
-	la.last_missed_appointment_service,
-	la.days_since_last_missed_appointment,
-	c.discharge_date,
-	c.patient_outcome,
+	lv.last_appointment_location,
+	CASE WHEN lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND lv.last_appointment_location IS NOT NULL THEN lv.last_appointment_location WHEN lfl.last_form_date > lv.last_appointment_date AND lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= lv.last_appointment_date AND lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NOT NULL THEN lv.last_appointment_location ELSE NULL END AS last_visit_location,
+	lv.last_form_date,
+	lv.last_form_type,	
+	lv.last_appointment_date,
+	lv.last_appointment_service,
+	lv.last_visit_date,
+	lv.last_visit_type,
+	lv.days_since_last_visit,
+	lv.last_missed_appointment_date,
+	lv.last_missed_appointment_service,
+	lv.days_since_last_missed_appointment,
 	lhv.last_med_visit_date,
 	lhv.last_med_visit_type,
 	lhv.drug_use_last_visit,
@@ -217,6 +244,8 @@ SELECT
 	lhv.cirrhosis_last_visit,
 	h6m.nb_hospitalised_last_6m,
 	h6m.hospitalised_last_6m,
+	hiv.last_hiv_date,
+	hiv.last_hiv,
 	ti.treatment_start_date AS treatment_start_date_initial,
 	ti.medication_duration AS treatment_duration_initial,
 	ti.hepatitis_c_treatment_choice AS treatment_initial,
@@ -234,9 +263,12 @@ SELECT
 	WHEN ts.treatment_end_date IS NULL AND ts.medication_duration IS NULL AND ti.treatment_end_date IS NOT NULL THEN (ti.treatment_end_date + INTERVAL '84 days')::date 
 	WHEN ts.treatment_end_date IS NULL AND ts.medication_duration IS NULL AND ti.treatment_end_date IS NULL AND ti.medication_duration = '12 weeks' THEN (ti.treatment_start_date + INTERVAL '168 days')::date 
 	WHEN ts.treatment_end_date IS NULL AND ts.medication_duration IS NULL AND ti.treatment_end_date IS NULL AND ti.medication_duration = '24 weeks' THEN (ts.treatment_start_date + INTERVAL '252 days')::date END AS post_treatment_pcr_due_date,
-	c.hcv_pcr_12_weeks_after_treatment_end, 
-	c.date_test_completed, 
-	c.result_return_date
+	tf.first_treatment_failure,
+	tf.hcv_pcr_12_weeks_after_treatment_end AS treatment_failure_PCR_12w,
+	CASE WHEN lv.last_visit_type = 'Discharge visit' THEN ld.patient_outcome ELSE NULL END AS patient_outcome,
+	CASE WHEN lv.last_visit_type = 'Discharge visit' THEN lv.last_visit_date ELSE NULL END AS discharge_date,
+	ld.last_pcr_12w, 
+	CASE WHEN lv.last_visit_type != 'Discharge visit' THEN 'Yes' ELSE NULL END AS in_cohort
 FROM cohort c
 LEFT OUTER JOIN patient_identifier pi
 	ON c.patient_id = pi.patient_id
@@ -246,15 +278,21 @@ LEFT OUTER JOIN person_details_default pdd
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.initial_encounter_id = ped.encounter_id
-LEFT OUTER JOIN last_appointments la
-	ON c.initial_encounter_id = la.initial_encounter_id
+LEFT OUTER JOIN last_visit lv
+	ON c.initial_encounter_id = lv.initial_encounter_id
 LEFT OUTER JOIN last_hepc_visit lhv	
 	ON c.initial_encounter_id = lhv.initial_encounter_id
 LEFT OUTER JOIN hospitalisation_last_6m h6m
 	ON c.initial_encounter_id = h6m.initial_encounter_id
-LEFT OUTER JOIN treatment_initial ti
-	ON c.initial_encounter_id = ti.initial_encounter_id
+LEFT OUTER JOIN last_hiv hiv 
+	ON c.initial_encounter_id = hiv.initial_encounter_id
+LEFT OUTER JOIN treatment_order ti
+	ON c.initial_encounter_id = ti.initial_encounter_id AND treatment_order = 1
 LEFT OUTER JOIN treatment_secondary ts
 	ON c.initial_encounter_id = ts.initial_encounter_id
 LEFT OUTER JOIN last_form_location lfl
-	ON c.initial_encounter_id = lfl.initial_encounter_id;
+	ON c.initial_encounter_id = lfl.initial_encounter_id
+LEFT OUTER JOIN treatment_failure tf
+	ON c.initial_encounter_id = tf.initial_encounter_id
+LEFT OUTER JOIN last_discharge ld 
+	ON c.initial_encounter_id = ld.initial_encounter_id;

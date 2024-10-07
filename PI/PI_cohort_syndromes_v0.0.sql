@@ -51,28 +51,24 @@ last_visit_location_cte AS (
 	WHERE vlc.date >= c.intake_date AND (vlc.date <= c.discharge_date OR c.discharge_date IS NULL)
 	GROUP BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vlc.date, vlc.visit_location
 	ORDER BY c.patient_id, c.intake_encounter_id, c.intake_date, c.discharge_date, vlc.date DESC),
--- THe Stressor sub-table creates a vertical list of all stressors.
-stressor_vertical_cte AS (
-    SELECT 
-        encounter_id,
-        stressor_1 AS stressor
-    FROM mental_health_intake
-    UNION
-    SELECT
-        encounter_id,
-        stressor_2 AS stressor
-    FROM mental_health_intake
-    UNION
-    SELECT 
-        encounter_id,
-        stressor_3 AS stressor
-    FROM mental_health_intake),
-stressors_cte AS (
+-- The Mental Health syndrome CTEs takes only the last diagnoses reported per cohort enrollment from either the Psychiatrist mhGap initial or follow-up forms. 
+ia_syndrome AS (
+	SELECT 
+        pcia.patient_id, c.intake_encounter_id, pcia.date, pcia.main_syndrome, pcia.additional_syndrome, ROW_NUMBER() OVER (PARTITION BY pcia.patient_id ORDER BY pcia.date DESC, pcia.date_created DESC) AS rn
+    FROM psy_counselors_initial_assessment pcia
+	JOIN cohort c
+		ON pcia.patient_id = c.patient_id AND c.intake_date <= pcia.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= pcia.date
+    WHERE COALESCE(pcia.main_syndrome, pcia.additional_syndrome) IS NOT NULL),
+last_syndrome AS (
 	SELECT
-		DISTINCT ON (encounter_id, stressor) encounter_id,
-		stressor
-	FROM stressor_vertical_cte
-	where stressor IS NOT NULL)
+		patient_id, intake_encounter_id, date, main_syndrome AS syndrome
+	FROM ia_syndrome
+	WHERE main_syndrome IS NOT NULL AND rn = 1
+	UNION ALL
+	SELECT
+		patient_id, intake_encounter_id, date, additional_syndrome AS syndrome
+	FROM ia_syndrome
+	WHERE additional_syndrome IS NOT NULL AND rn = 1)
 -- Main query --
 SELECT 
 	pi."Patient_Identifier",
@@ -113,10 +109,10 @@ SELECT
 	END AS status,	
 	mhi.visit_location AS entry_visit_location,
 	lvlc.visit_location,
-	sc.stressor
-FROM stressors_cte sc
+	ls.syndrome
+FROM last_syndrome ls
 LEFT OUTER JOIN cohort c
-    ON sc.encounter_id = c.intake_encounter_id
+    ON ls.intake_encounter_id = c.intake_encounter_id
 LEFT OUTER JOIN first_psy_initial_assessment fpia 
 	ON c.intake_encounter_id = fpia.intake_encounter_id
 LEFT OUTER JOIN first_clinician_initial_assessment fcia 
