@@ -5,7 +5,7 @@ WITH initial AS (
 	FROM hepatitis_c WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i1.patient_id, i1.initial_encounter_id, i1.initial_visit_location, i1.initial_visit_date, CASE WHEN i1.initial_visit_order > 1 THEN 'Yes' END readmission, CASE WHEN i2.initial_visit_date IS NOT NULL THEN i2.initial_visit_date WHEN i2.initial_visit_date IS NULL THEN CURRENT_DATE ELSE NULL END AS end_date
+		i1.patient_id, i1.initial_encounter_id, i1.initial_visit_location, i1.initial_visit_date, CASE WHEN i1.initial_visit_order > 1 THEN 'Yes' END readmission, COALESCE(i2.initial_visit_date, CURRENT_DATE) AS end_date
 	FROM initial i1
 	LEFT OUTER JOIN initial i2
 		ON i1.patient_id = i2.patient_id AND  i1.initial_visit_order = (i2.initial_visit_order - 1)),
@@ -173,8 +173,8 @@ first_vl AS (
 	SELECT 
 		DISTINCT ON (tto.patient_id, tto.initial_encounter_id) tto.patient_id,
 		tto.initial_encounter_id,
-		COALESCE(vli.date_of_sample_collection::date, vli.date::date) AS first_vl_date, 
-		vli.hcv_rna_pcr_qualitative_result AS first_vl_result,
+		COALESCE(vli.date_of_sample_collection::date, vli.date::date) AS initial_vl_date, 
+		vli.hcv_rna_pcr_qualitative_result AS initial_vl_result,
 		vli.visit_type
 	FROM treatment_order tto
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
@@ -251,9 +251,8 @@ SELECT
 	pa."Living_conditions",
 	c.initial_visit_date AS enrollment_date,
 	c.readmission,
-	fvl.visit_type,
-	fvl.first_vl_date,
-	fvl.first_vl_result,
+	fvl.initial_vl_date,
+	fvl.initial_vl_result,
 	c.initial_visit_location,
 	lfl.last_form_location,
 	lv.last_appointment_location,
