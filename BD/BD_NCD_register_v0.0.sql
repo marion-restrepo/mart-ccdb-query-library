@@ -1,51 +1,60 @@
--- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on NCD forms with visit types of 'initial visit' and 'discharge visit'. The query takes all initial visit dates and matches discharge visit dates if the discharge visit date falls between the initial visit date and the next initial visit date (if present).
+-- The first CTEs build the frame for patients entering and exiting the cohort. This frame is based on NCD forms with visit types of 'initial visit' and 'discharge visit'. The query takes all initial visit dates and matches discharge visit dates if the discharge visit date falls between the initial visit date and the next initial visit date (if present).
 WITH initial AS (
 	SELECT 
 		patient_id, encounter_id AS initial_encounter_id, visit_location AS initial_visit_location, date AS initial_visit_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS initial_visit_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_initial_visit_date
 	FROM ncd WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome AS patient_outcome
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, d.discharge_date, d.patient_outcome AS patient_outcome
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
-		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
+	LEFT JOIN (SELECT patient_id, encounter_id, COALESCE(discharge_date::date, date::date) AS discharge_date, patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
+		ON i.patient_id = d.patient_id AND d.discharge_date >= i.initial_visit_date AND (d.discharge_date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
 -- The last completed and missed appointment CTEs determine if a patient currently enrolled in the cohort has not attended their appointments.  
 last_completed_appointment AS (
-	SELECT
-		DISTINCT ON (patient_id) patient_id,
-		appointment_start_time,
-		appointment_status,
-		appointment_service,
-		appointment_location,
-		DATE_PART('day',(now())-(appointment_start_time::timestamp))::int AS days_since
-	FROM patient_appointment_default
-	WHERE appointment_start_time < now()
-		AND (appointment_status = 'Completed' OR appointment_status = 'CheckedIn')
-	ORDER BY patient_id, appointment_start_time DESC),
+	SELECT patient_id, appointment_start_time, appointment_service, appointment_location
+	FROM (
+		SELECT
+			patient_id,
+			appointment_start_time,
+			appointment_service,
+			appointment_location,
+			ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY appointment_start_time DESC) AS rn
+		FROM patient_appointment_default
+		WHERE appointment_start_time < now() AND (appointment_status = 'Completed' OR appointment_status = 'CheckedIn')) foo
+	WHERE rn = 1),
 first_missed_appointment AS (
-	SELECT
-		DISTINCT ON (pa.patient_id) pa.patient_id,
-		pa.appointment_start_time,
-		pa.appointment_status,
-		pa.appointment_service,
-		DATE_PART('day',(now())-(pa.appointment_start_time::timestamp))::int AS days_since
-	FROM last_completed_appointment lca
-	RIGHT JOIN patient_appointment_default pa
-		ON lca.patient_id = pa.patient_id 
-		WHERE pa.appointment_start_time > lca.appointment_start_time AND pa.appointment_status = 'Missed'
-		ORDER BY pa.patient_id, pa.appointment_start_time ASC),
+	SELECT patient_id, appointment_start_time, appointment_service
+	FROM (
+		SELECT
+			pa.patient_id,
+			pa.appointment_start_time,
+			pa.appointment_service,
+			ROW_NUMBER() OVER (PARTITION BY pa.patient_id ORDER BY pa.appointment_start_time) AS rn
+		FROM last_completed_appointment lca
+		RIGHT JOIN patient_appointment_default pa
+			ON lca.patient_id = pa.patient_id 
+		WHERE pa.appointment_start_time > lca.appointment_start_time AND pa.appointment_status = 'Missed') foo
+	WHERE rn = 1),
 last_form AS (
-	SELECT 
-		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
-		nvsl.date AS last_form_date,
-		last_form_type AS last_form_type
-	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, CASE WHEN visit_type = 'Discharge visit' AND discharge_date IS NOT NULL THEN discharge_date 
-	ELSE date END AS date, visit_type AS last_form_type FROM NCD UNION SELECT patient_id, CASE WHEN date_of_sample_collection IS NOT NULL THEN date_of_sample_collection ELSE date END AS date, form_field_path AS last_form_type FROM vitals_and_laboratory_information) nvsl
-		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
-	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.last_form_type
-	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
-last_appointments AS (
+	SELECT initial_encounter_id, last_form_date, last_form_type 
+	FROM (
+		SELECT 
+			c.patient_id,
+			c.initial_encounter_id,
+			nvsl.date AS last_form_date,
+			nvsl.last_form_type AS last_form_type,
+			ROW_NUMBER() OVER (PARTITION BY nvsl.patient_id ORDER BY nvsl.date DESC) AS rn
+		FROM cohort c
+		LEFT OUTER JOIN (
+			SELECT 
+				patient_id, COALESCE(discharge_date, date) AS date, visit_type AS last_form_type 
+			FROM ncd 
+			UNION 
+			SELECT patient_id, date, form_field_path AS last_form_type
+			FROM vitals_and_laboratory_information) nvsl
+			ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND c.discharge_date >= nvsl.date::date) foo
+	WHERE rn = 1),
+last_visit AS (
 	SELECT
 		lca.patient_id,
 		c.initial_encounter_id,
@@ -62,19 +71,37 @@ last_appointments AS (
 		CASE WHEN fma.appointment_start_time IS NOT NULL THEN (DATE_PART('day',(now())-(fma.appointment_start_time::timestamp)))::int ELSE NULL END AS days_since_last_missed_appointment
 	FROM cohort c
 	LEFT OUTER JOIN last_completed_appointment lca 
-		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time
+		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time AND c.discharge_date >= lca.appointment_start_time
 	LEFT OUTER JOIN first_missed_appointment fma
-		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= fma.appointment_start_time
+		ON c.patient_id = fma.patient_id AND c.initial_visit_date <= fma.appointment_start_time AND c.discharge_date >= fma.appointment_start_time
 	LEFT OUTER JOIN last_form lf
 		ON c.initial_encounter_id = lf.initial_encounter_id),		
--- The NCD diagnosis CTEs select the last reported NCD diagnosis per cohort enrollment and pivots the data horizontally.
+-- The NCD diagnosis CTEs extract all NCD diagnoses for patients reported between their initial visit and discharge visit. Diagnoses are only reported once. For specific disease groups, the second CTE extracts only the last reported diagnosis among the groups. These groups include types of diabetes, types of epilespy, and hyper-/hypothyroidism. The final CTE pivotes the diagnoses horizontally.
 cohort_diagnosis AS (
 	SELECT
-		DISTINCT ON (d.patient_id, d.ncdiagnosis) d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+		c.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
 	FROM ncdiagnosis d 
 	LEFT JOIN ncd n USING(encounter_id)
-	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date
-	ORDER BY d.patient_id, d.ncdiagnosis, n.date),
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND COALESCE(c.discharge_date::date, CURRENT_DATE) >= n.date),
+cohort_diagnosis_last AS (
+    SELECT
+        patient_id, initial_encounter_id, diagnosis, date
+    FROM (
+        SELECT
+            cdg.*,
+            ROW_NUMBER() OVER (PARTITION BY patient_id, initial_encounter_id, diagnosis_group ORDER BY date DESC) AS rn
+        FROM (
+            SELECT
+                cd.*,
+                CASE
+                    WHEN diagnosis IN ('Chronic kidney disease', 'Cardiovascular disease', 'Asthma', 'Chronic obstructive pulmonary disease', 'Hypertension', 'Other') THEN 'Group1'
+                    WHEN diagnosis IN ('Diabetes mellitus, type 1', 'Diabetes mellitus, type 2') THEN 'Group2'
+                    WHEN diagnosis IN ('Focal epilepsy', 'Generalised epilepsy', 'Unclassified epilepsy') THEN 'Group3'
+                    WHEN diagnosis IN ('Hypothyroidism', 'Hyperthyroidism') THEN 'Group4'
+                    ELSE 'Other'
+                END AS diagnosis_group
+            FROM cohort_diagnosis cd) cdg) foo
+    WHERE rn = 1),
 ncd_diagnosis_pivot AS (
 	SELECT 
 		DISTINCT ON (initial_encounter_id, patient_id) initial_encounter_id, 
@@ -92,11 +119,11 @@ ncd_diagnosis_pivot AS (
 		MAX (CASE WHEN diagnosis = 'Generalised epilepsy' THEN 1 ELSE NULL END) AS generalised_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Unclassified epilepsy' THEN 1 ELSE NULL END) AS unclassified_epilepsy,
 		MAX (CASE WHEN diagnosis = 'Other' THEN 1 ELSE NULL END) AS other_ncd
-	FROM cohort_diagnosis
+	FROM cohort_diagnosis_last
 	GROUP BY initial_encounter_id, patient_id),
 ncd_diagnosis_list AS (
 	SELECT initial_encounter_id, STRING_AGG(diagnosis, ', ') AS diagnosis_list
-	FROM cohort_diagnosis
+	FROM cohort_diagnosis_last
 	GROUP BY initial_encounter_id),
 -- The risk factor CTEs pivot risk factor data horizontally from the NCD form. Only the last risk factors are reported per cohort enrollment are present. 
 ncd_risk_factors_pivot AS (
@@ -133,7 +160,7 @@ last_risk_factors AS (
 		nrfp.other_risk_factor
 	FROM cohort c
 	LEFT OUTER JOIN ncd_risk_factors_pivot nrfp 
-		ON c.patient_id = nrfp.patient_id AND c.initial_visit_date <= nrfp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nrfp.date
+		ON c.patient_id = nrfp.patient_id AND c.initial_visit_date <= nrfp.date AND COALESCE(c.discharge_date, CURRENT_DATE) >= nrfp.date
 	WHERE nrfp.date IS NOT NULL	
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_encounter_id, c.discharge_date, nrfp.date, nrfp.occupational_exposure, nrfp.traditional_medicine, nrfp.secondhand_smoking, nrfp.smoker, nrfp.kitchen_smoke, nrfp.alcohol_use, nrfp.other_risk_factor
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, nrfp.date DESC),
@@ -172,7 +199,7 @@ last_epilepsy_history AS (
 		ehp.other_epilepsy_history
 	FROM cohort c
 	LEFT OUTER JOIN epilepsy_history_pivot ehp 
-		ON c.patient_id = ehp.patient_id AND c.initial_visit_date <= ehp.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= ehp.date
+		ON c.patient_id = ehp.patient_id AND c.initial_visit_date <= ehp.date AND COALESCE(c.discharge_date, CURRENT_DATE) >= ehp.date
 	WHERE ehp.date IS NOT NULL	
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_encounter_id, c.discharge_date, ehp.date, ehp.delayed_milestones, ehp.cerebral_malaria, ehp.birth_trauma, ehp.neonatal_sepsis, ehp.meningitis, ehp.head_injury, ehp.other_epilepsy_history
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, ehp.date DESC),		
@@ -181,7 +208,7 @@ hospitalisation_last_6m AS (
 	SELECT DISTINCT ON (c.patient_id, c.initial_encounter_id) c.patient_id,	c.initial_encounter_id, COUNT(n.hospitalised_since_last_visit) AS nb_hospitalised_last_6m, CASE WHEN n.hospitalised_since_last_visit IS NOT NULL THEN 'Yes' ELSE 'No' END AS hospitalised_last_6m
 		FROM cohort c
 		LEFT OUTER JOIN ncd n
-			ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+			ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 		WHERE n.hospitalised_since_last_visit = 'Yes' and n.date <= current_date and n.date >= current_date - interval '6 months'
 		GROUP BY c.patient_id, c.initial_encounter_id, n.hospitalised_since_last_visit),
 -- The last eye exam CTE extracts the date of the last eye exam performed per cohort enrollment.
@@ -195,7 +222,7 @@ last_eye_exam AS (
 		n.date::date AS last_eye_exam_date
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 	WHERE n.eye_exam_performed = 'Yes'
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last foot exam CTE extracts the date of the last eye exam performed per cohort enrollment.
@@ -209,7 +236,7 @@ last_foot_exam AS (
 		n.date::date AS last_foot_exam_date
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 	WHERE n.foot_exam_performed = 'Yes'
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The asthma severity CTE extracts the last asthma severity reported per cohort enrollment.
@@ -224,7 +251,7 @@ asthma_severity AS (
 		n.asthma_severity
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 	WHERE n.asthma_severity IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The seizure onset CTE extracts the last age of seizure onset reported per cohort enrollment.
@@ -239,7 +266,7 @@ seizure_onset AS (
 		n.age_at_onset_of_seizure_in_years AS seizure_onset_age
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 	WHERE n.age_at_onset_of_seizure_in_years IS NOT NULL
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last NCD visit CTE extracts the last NCD visit data per cohort enrollment to look at if there are values reported for pregnancy, family planning, hospitalization, missed medication, seizures, or asthma/COPD exacerbations repoted at the last visit. 
@@ -261,7 +288,7 @@ last_ncd_form AS (
 		n.exacerbation_per_week AS nb_exacerbations_last_visit
 	FROM cohort c
 	LEFT OUTER JOIN ncd n
-		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date::date
+		ON c.patient_id = n.patient_id AND c.initial_visit_date <= n.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= n.date::date
 	ORDER BY c.patient_id, c.initial_encounter_id, n.patient_id, n.date::date DESC),
 -- The last visit location CTE finds the last visit location reported in NCD forms.
 last_form_location AS (	
@@ -270,8 +297,8 @@ last_form_location AS (
 		nvsl.date AS last_form_date,
 		nvsl.visit_location AS last_form_location
 	FROM cohort c
-	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, CASE WHEN date_of_sample_collection IS NOT NULL THEN date_of_sample_collection ELSE date END AS date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
-		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, COALESCE(date_of_sample_collection, date) AS date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND COALESCE(c.discharge_date, CURRENT_DATE) >= nvsl.date::date
 	WHERE nvsl.visit_location IS NOT NULL
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
@@ -283,14 +310,14 @@ last_bp AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END AS last_bp_date,
+		COALESCE(vli.date, vli.date_of_sample_collection) AS last_bp_date,
 		vli.systolic_blood_pressure,
 		vli.diastolic_blood_pressure
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date, vli.date_of_sample_collection) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date, vli.date_of_sample_collection) 
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.systolic_blood_pressure IS NOT NULL AND vli.diastolic_blood_pressure IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date, vli.date_of_sample_collection) DESC),
 -- The last BMI CTE extracts the last BMI measurement reported per cohort enrollment. Uses date reported on form. If no date is present, uses date of sample collection. If neither date or date of sample collection are present, results are not considered. 
 last_bmi AS (
 	SELECT 
@@ -299,13 +326,13 @@ last_bmi AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END AS last_bmi_date,
+		COALESCE(vli.date, vli.date_of_sample_collection) AS last_bmi_date,
 		vli.bmi_kg_m2 AS last_bmi
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date, vli.date_of_sample_collection) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date, vli.date_of_sample_collection) 
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.bmi_kg_m2 IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date IS NOT NULL THEN vli.date::date ELSE vli.date_of_sample_collection::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date, vli.date_of_sample_collection) DESC),
 -- The last fasting blood glucose CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_fbg AS (
 	SELECT 
@@ -314,13 +341,13 @@ last_fbg AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_fbg_date,
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_fbg_date,
 		vli.fasting_blood_glucose_mg_dl AS last_fbg
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.fasting_blood_glucose_mg_dl IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
 -- The last HbA1c CTE extracts the last fasting blood glucose measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_hba1c AS (
 	SELECT 
@@ -329,13 +356,13 @@ last_hba1c AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_hba1c_date, 
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_hba1c_date, 
 		vli.hba1c AS last_hba1c
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hba1c IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
 -- The last GFR CTE extracts the last GFR measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_gfr AS (
 	SELECT 
@@ -344,13 +371,13 @@ last_gfr AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_gfr_date, 
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_gfr_date, 
 		vli.gfr_ml_min_1_73m2 AS last_gfr
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.gfr_ml_min_1_73m2 IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
 -- The last creatinine CTE extracts the last creatinine measurement reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_creatinine AS (
 	SELECT 
@@ -359,13 +386,13 @@ last_creatinine AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_creatinine_date, 
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_creatinine_date, 
 		vli.creatinine_mg_dl AS last_creatinine
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.creatinine_mg_dl IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
 -- The last urine protein CTE extracts the last urine protein result reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_urine_protein AS (
 	SELECT 
@@ -374,13 +401,13 @@ last_urine_protein AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_urine_protein_date, 
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_urine_protein_date, 
 		vli.urine_protein AS last_urine_protein
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.urine_protein IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC),
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
 -- The last HIV test CTE extracts the last HIV test result reported per cohort enrollment. Uses date of sample collection reported on form. If no date of sample collection is present, uses date of form. If neither date or date of sample collection are present, results are not considered. 
 last_hiv AS (
 	SELECT 
@@ -389,13 +416,26 @@ last_hiv AS (
 		c.initial_visit_date, 
 		c.discharge_encounter_id,
 		c.discharge_date, 
-		CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END AS last_hiv_date, 
+		COALESCE(vli.date_of_sample_collection, vli.date) AS last_hiv_date, 
 		vli.hiv_test AS last_hiv
 	FROM cohort c
 	LEFT OUTER JOIN vitals_and_laboratory_information vli
-		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END) AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= (CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END)
+		ON c.patient_id = vli.patient_id AND c.initial_visit_date <= COALESCE(vli.date_of_sample_collection, vli.date) AND COALESCE(c.discharge_date, CURRENT_DATE) >= COALESCE(vli.date_of_sample_collection, vli.date)
 	WHERE COALESCE(vli.date, vli.date_of_sample_collection) IS NOT NULL AND vli.hiv_test IS NOT NULL
-	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, CASE WHEN vli.date_of_sample_collection IS NOT NULL THEN vli.date_of_sample_collection::date ELSE vli.date::date END DESC)
+	ORDER BY c.patient_id, c.initial_encounter_id, vli.patient_id, COALESCE(vli.date_of_sample_collection, vli.date) DESC),
+-- The next appointment CTE extracts the next appointment date for all patients currently enrolled in the cohort (excludes patients with a discharge).  
+next_appointment AS (
+	SELECT patient_id, appointment_start_time, appointment_service, appointment_location
+	FROM (
+		SELECT
+			patient_id,
+			appointment_start_time,
+			appointment_service,
+			appointment_location,
+			ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY appointment_start_time ASC) AS rn
+		FROM patient_appointment_default
+		WHERE appointment_start_time > now()) foo
+	WHERE rn = 1)
 -- Main query --
 SELECT
 	pi."Patient_Identifier",
@@ -439,23 +479,26 @@ SELECT
 	CASE WHEN c.discharge_date IS NULL THEN 'Yes' END AS in_cohort,
 	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 6 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_6m,
 	CASE WHEN ((DATE_PART('year', CURRENT_DATE) - DATE_PART('year', c.initial_visit_date)) * 12 + (DATE_PART('month', CURRENT_DATE) - DATE_PART('month', c.initial_visit_date))) >= 12 AND c.discharge_date IS NULL THEN 'Yes' END AS in_cohort_12m,
-	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_visit < 90 THEN 'Yes' WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_visit >= 90 AND (la.days_since_last_missed_appointment IS NULL OR la.days_since_last_missed_appointment < 90) THEN 'Yes' ELSE NULL END AS active_patient,
-	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND la.days_since_last_missed_appointment >= 90 AND la.days_since_last_missed_appointment <= la.days_since_last_visit THEN 'Yes' ELSE NULL END AS inactive_patient,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND lv.days_since_last_visit < 90 THEN 'Yes' WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND lv.days_since_last_visit >= 90 AND (lv.days_since_last_missed_appointment IS NULL OR lv.days_since_last_missed_appointment < 90) THEN 'Yes' ELSE NULL END AS active_patient,
+	CASE WHEN c.initial_visit_date IS NOT NULL AND c.discharge_date IS NULL AND c.patient_outcome IS NULL AND lv.days_since_last_missed_appointment >= 90 AND lv.days_since_last_missed_appointment <= lv.days_since_last_visit THEN 'Yes' ELSE NULL END AS inactive_patient,
+	CASE WHEN c.discharge_date IS NULL THEN na.appointment_start_time::date END AS next_appointment,
+	CASE WHEN c.discharge_date IS NULL THEN na.appointment_service END AS next_appointment_service,
+	CASE WHEN c.discharge_date IS NULL THEN na.appointment_location END AS next_appointment_location,
 	c.readmission,
 	c.initial_visit_location,
 	lfl.last_form_location,
-	la.last_appointment_location,
-	CASE WHEN lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location WHEN lfl.last_form_date > la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= la.last_appointment_date AND lfl.last_form_location IS NOT NULL AND la.last_appointment_location IS NOT NULL THEN la.last_appointment_location ELSE NULL END AS last_visit_location,
-	la.last_form_date,
-	la.last_form_type,	
-	la.last_appointment_date,
-	la.last_appointment_service,
-	la.last_visit_date,
-	la.last_visit_type,
-	la.days_since_last_visit,
-	la.last_missed_appointment_date,
-	la.last_missed_appointment_service,
-	la.days_since_last_missed_appointment,
+	lv.last_appointment_location,
+	CASE WHEN lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NULL THEN lfl.last_form_location WHEN lfl.last_form_location IS NULL AND lv.last_appointment_location IS NOT NULL THEN lv.last_appointment_location WHEN lfl.last_form_date > lv.last_appointment_date AND lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NOT NULL THEN lfl.last_form_location WHEN lfl.last_form_date <= lv.last_appointment_date AND lfl.last_form_location IS NOT NULL AND lv.last_appointment_location IS NOT NULL THEN lv.last_appointment_location ELSE NULL END AS last_visit_location,
+	lv.last_form_date,
+	lv.last_form_type,	
+	lv.last_appointment_date,
+	lv.last_appointment_service,
+	lv.last_visit_date,
+	lv.last_visit_type,
+	lv.days_since_last_visit,
+	lv.last_missed_appointment_date,
+	lv.last_missed_appointment_service,
+	lv.days_since_last_missed_appointment,
 	c.discharge_date,
 	c.patient_outcome,
 	lnf.pregnant_last_visit,
@@ -531,8 +574,8 @@ LEFT OUTER JOIN person_details_default pdd
 	ON c.patient_id = pdd.person_id
 LEFT OUTER JOIN patient_encounter_details_default ped 
 	ON c.initial_encounter_id = ped.encounter_id
-LEFT OUTER JOIN last_appointments la
-	ON c.initial_encounter_id = la.initial_encounter_id
+LEFT OUTER JOIN last_visit lv
+	ON c.initial_encounter_id = lv.initial_encounter_id
 LEFT OUTER JOIN ncd_diagnosis_pivot ndx
 	ON c.initial_encounter_id = ndx.initial_encounter_id
 LEFT OUTER JOIN ncd_diagnosis_list ndl
@@ -570,4 +613,6 @@ LEFT OUTER JOIN last_urine_protein lup
 LEFT OUTER JOIN last_hiv lh
 	ON c.initial_encounter_id = lh.initial_encounter_id
 LEFT OUTER JOIN last_form_location lfl
-	ON c.initial_encounter_id = lfl.initial_encounter_id;
+	ON c.initial_encounter_id = lfl.initial_encounter_id
+LEFT OUTER JOIN next_appointment na 
+	ON c.patient_id = na.patient_id;
