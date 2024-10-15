@@ -1,23 +1,41 @@
--- The first CTE build the frame for patients entering and exiting the cohort. This frame is based on NCD forms with visit types of 'initial visit' and 'discharge visit'. The query takes all initial visit dates and matches discharge visit dates if the discharge visit date falls between the initial visit date and the next initial visit date (if present).
+-- The first CTEs build the frame for patients entering and exiting the cohort. This frame is based on NCD forms with visit types of 'initial visit' and 'discharge visit'. The query takes all initial visit dates and matches discharge visit dates if the discharge visit date falls between the initial visit date and the next initial visit date (if present).
 WITH initial AS (
 	SELECT 
 		patient_id, encounter_id AS initial_encounter_id, visit_location AS initial_visit_location, date AS initial_visit_date, DENSE_RANK () OVER (PARTITION BY patient_id ORDER BY date) AS initial_visit_order, LEAD (date) OVER (PARTITION BY patient_id ORDER BY date) AS next_initial_visit_date
 	FROM ncd WHERE visit_type = 'Initial visit'),
 cohort AS (
 	SELECT
-		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, CASE WHEN d.discharge_date IS NOT NULL THEN d.discharge_date WHEN d.discharge_date IS NULL THEN d.date ELSE NULL END AS discharge_date, d.patient_outcome AS patient_outcome
+		i.patient_id, i.initial_encounter_id, i.initial_visit_location, i.initial_visit_date, CASE WHEN i.initial_visit_order > 1 THEN 'Yes' END readmission, d.encounter_id AS discharge_encounter_id, d.discharge_date, d.patient_outcome AS patient_outcome
 	FROM initial i
-	LEFT JOIN (SELECT patient_id, date, encounter_id, discharge_date, patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
-		ON i.patient_id = d.patient_id AND d.date >= i.initial_visit_date AND (d.date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
--- The NCD diagnosis CTE select the last reported NCD diagnosis per cohort enrollment. 
+	LEFT JOIN (SELECT patient_id, encounter_id, COALESCE(discharge_date::date, date::date) AS discharge_date, patient_outcome FROM ncd WHERE visit_type = 'Discharge visit') d 
+		ON i.patient_id = d.patient_id AND d.discharge_date >= i.initial_visit_date AND (d.discharge_date < i.next_initial_visit_date OR i.next_initial_visit_date IS NULL)),
+-- The NCD diagnosis CTEs extract all NCD diagnoses for patients reported between their initial visit and discharge visit. Diagnoses are only reported once. For specific disease groups, the second CTE extracts only the last reported diagnosis among the groups. These groups include types of diabetes, types of epilespy, and hyper-/hypothyroidism.
 cohort_diagnosis AS (
 	SELECT
-		DISTINCT ON (d.patient_id, d.ncdiagnosis) d.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
+		c.patient_id, c.initial_encounter_id, n.date, d.ncdiagnosis AS diagnosis
 	FROM ncdiagnosis d 
 	LEFT JOIN ncd n USING(encounter_id)
-	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= n.date
-	ORDER BY d.patient_id, d.ncdiagnosis, n.date),
--- The last visit location CTE finds the last visit location reported in NCD forms.
+	LEFT JOIN cohort c ON d.patient_id = c.patient_id AND c.initial_visit_date <= n.date AND COALESCE(c.discharge_date::date, CURRENT_DATE) >= n.date),
+cohort_diagnosis_last AS (
+    SELECT
+        patient_id, initial_encounter_id, diagnosis, date
+    FROM (
+        SELECT
+            cdg.*,
+            ROW_NUMBER() OVER (PARTITION BY patient_id, initial_encounter_id, diagnosis_group ORDER BY date DESC) AS rn
+        FROM (
+            SELECT
+                cd.*,
+                CASE
+                    WHEN diagnosis IN ('Chronic kidney disease', 'Cardiovascular disease', 'Asthma', 'Chronic obstructive pulmonary disease', 'Hypertension', 'Other') THEN 'Group1'
+                    WHEN diagnosis IN ('Diabetes mellitus, type 1', 'Diabetes mellitus, type 2') THEN 'Group2'
+                    WHEN diagnosis IN ('Focal epilepsy', 'Generalised epilepsy', 'Unclassified epilepsy') THEN 'Group3'
+                    WHEN diagnosis IN ('Hypothyroidism', 'Hyperthyroidism') THEN 'Group4'
+                    ELSE 'Other'
+                END AS diagnosis_group
+            FROM cohort_diagnosis cd) cdg) foo
+    WHERE rn = 1),
+-- The last visit location CTEs find the last visit location reported in NCD forms and appointment scheduling module.
 last_form_location AS (	
 	SELECT 
 		DISTINCT ON (c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date) c.initial_encounter_id,
@@ -25,7 +43,7 @@ last_form_location AS (
 		nvsl.visit_location AS last_form_location
 	FROM cohort c
 	LEFT OUTER JOIN (SELECT patient_id, date, visit_location FROM NCD UNION SELECT patient_id, date, location_name AS visit_location FROM vitals_and_laboratory_information) nvsl
-		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= nvsl.date::date
+		ON c.patient_id = nvsl.patient_id AND c.initial_visit_date <= nvsl.date::date AND COALESCE(c.discharge_date::date, CURRENT_DATE) >= nvsl.date::date
 	WHERE nvsl.visit_location IS NOT NULL
 	GROUP BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date, nvsl.visit_location
 	ORDER BY c.patient_id, c.initial_encounter_id, c.initial_visit_date, c.discharge_date, nvsl.date DESC),
@@ -45,7 +63,7 @@ last_visit_location AS (
 	LEFT OUTER JOIN last_form_location lfl
 		ON c.initial_encounter_id = lfl.initial_encounter_id 
 	LEFT OUTER JOIN last_completed_appointment lca
-		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time::date AND CASE WHEN c.discharge_date IS NOT NULL THEN c.discharge_date ELSE current_date END >= lca.appointment_start_time::date)
+		ON c.patient_id = lca.patient_id AND c.initial_visit_date <= lca.appointment_start_time::date AND COALESCE(c.discharge_date::date, CURRENT_DATE) >= lca.appointment_start_time::date)
 -- Main query --
 SELECT 
 	pi."Patient_Identifier",
@@ -86,11 +104,10 @@ SELECT
 	lvl.last_visit_location,
 	c.discharge_date,
 	c.patient_outcome,
-	cd.diagnosis,
-	cd.date AS diagnosis_date
-FROM cohort_diagnosis cd
+	cdl.diagnosis
+FROM cohort_diagnosis_last cdl
 LEFT OUTER JOIN cohort c
-	ON cd.initial_encounter_id = c.initial_encounter_id
+	ON cdl.initial_encounter_id = c.initial_encounter_id
 LEFT OUTER JOIN patient_identifier pi
 	ON c.patient_id = pi.patient_id
 LEFT OUTER JOIN person_attributes pa
