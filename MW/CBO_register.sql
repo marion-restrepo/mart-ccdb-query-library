@@ -245,4 +245,3 @@ LEFT OUTER JOIN "1_client_form" cf ON i.patient_id = cf.patient_id
 LEFT OUTER JOIN patient_identifier pi ON i.patient_id = pi.patient_id
 LEFT OUTER JOIN person_attributes pa ON i.patient_id = pa.person_id
 LEFT OUTER JOIN person_details_default pdd ON i.patient_id = pdd.person_id;
-
